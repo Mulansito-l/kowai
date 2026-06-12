@@ -10,7 +10,7 @@
 #include <stdlib.h>
 
 // --- AUXILIAR: Cargar e Inyectar textura en la VRAM ---
-static SDL_GPUTexture* kowai_internal_load_texture(SDL_GPUDevice* gpu_device, const char* filepath) {
+SDL_GPUTexture* kowai_internal_load_texture(SDL_GPUDevice* gpu_device, const char* filepath) {
     int w, h, comp;
     stbi_uc* pixels = stbi_load(filepath, &w, &h, &comp, STBI_rgb_alpha);
     if (!pixels) return NULL;
@@ -47,6 +47,12 @@ static SDL_GPUTexture* kowai_internal_load_texture(SDL_GPUDevice* gpu_device, co
 
 // --- AUXILIAR: Crear un Buffer en la GPU (Vertex / Index) y subirle datos ---
 static SDL_GPUBuffer* kowai_internal_create_gpu_buffer(SDL_GPUDevice* gpu_device, SDL_GPUBufferUsageFlags usage, const void* data, Uint32 size) {
+    // Dentro de model.c -> kowai_internal_create_gpu_buffer:
+    if (!gpu_device || size == 0 || !data) {
+        SDL_Log("GPU Buffer Error: Intento de crear buffer inválido (Size: %d, Data: %p)", size, data);
+        return NULL;
+    }
+
     SDL_GPUBufferCreateInfo b_info = { .usage = usage, .size = size };
     SDL_GPUBuffer* gpu_buffer = SDL_CreateGPUBuffer(gpu_device, &b_info);
 
@@ -68,6 +74,89 @@ static SDL_GPUBuffer* kowai_internal_create_gpu_buffer(SDL_GPUDevice* gpu_device
 
     SDL_ReleaseGPUTransferBuffer(gpu_device, tb);
     return gpu_buffer;
+}
+
+// --- CARGADOR DE GEOMETRÍA PURA (Soporta .gltf y .glb sin texturas de fábrica) ---
+KowaiModel* kowai_model_load_geometry_only(SDL_GPUDevice* gpu_device, const char* filepath) {
+    cgltf_options options = { 0 };
+    cgltf_data* data = NULL;
+
+    // cgltf detecta automáticamente si el archivo es binario (.glb) o texto (.gltf)
+    cgltf_result result = cgltf_parse_file(&options, filepath, &data);
+
+    if (result != cgltf_result_success) {
+        SDL_Log("Model Error: No se pudo parsear el archivo (gltf/glb): %s", filepath);
+        return NULL;
+    }
+
+    // Carga los buffers binarios (en el caso de .glb, extrae el chunk binario interno)
+    cgltf_load_buffers(&options, data, filepath);
+
+    KowaiModel* model = malloc(sizeof(KowaiModel));
+    model->mesh_count = (Uint32)data->meshes_count;
+    model->meshes = malloc(sizeof(KowaiMesh) * model->mesh_count);
+
+    // Iterar por cada malla definida dentro del archivo
+    for (Uint32 m = 0; m < model->mesh_count; m++) {
+        cgltf_primitive* prim = &data->meshes[m].primitives[0];
+        KowaiMesh* current_mesh = &model->meshes[m];
+
+        size_t vertex_count = prim->attributes[0].data->count;
+        KowaiVertex* vertices = calloc(vertex_count, sizeof(KowaiVertex));
+
+        // Mapear los atributos a nuestro layout intercalado (Interleaved Layout)
+        for (size_t a = 0; a < prim->attributes_count; a++) {
+            cgltf_attribute* attr = &prim->attributes[a];
+            if (attr->type == cgltf_attribute_type_position) {
+                for (size_t v = 0; v < vertex_count; v++)
+                    cgltf_accessor_read_float(attr->data, v, &vertices[v].x, 3);
+            }
+            else if (attr->type == cgltf_attribute_type_normal) {
+                for (size_t v = 0; v < vertex_count; v++)
+                    cgltf_accessor_read_float(attr->data, v, &vertices[v].nx, 3);
+            }
+            else if (attr->type == cgltf_attribute_type_texcoord) {
+                for (size_t v = 0; v < vertex_count; v++)
+                    cgltf_accessor_read_float(attr->data, v, &vertices[v].u, 2);
+            }
+        }
+
+        // Leer los Índices
+        current_mesh->index_count = (Uint32)prim->indices->count;
+        Uint32* indices = malloc(sizeof(Uint32) * current_mesh->index_count);
+        for (size_t i = 0; i < current_mesh->index_count; i++) {
+            indices[i] = (Uint32)cgltf_accessor_read_index(prim->indices, i);
+        }
+
+        // Subir buffers geométricos a la GPU de forma atómica
+        current_mesh->vertex_buffer = kowai_internal_create_gpu_buffer(gpu_device, SDL_GPU_BUFFERUSAGE_VERTEX, vertices, sizeof(KowaiVertex) * vertex_count);
+        current_mesh->index_buffer = kowai_internal_create_gpu_buffer(gpu_device, SDL_GPU_BUFFERUSAGE_INDEX, indices, sizeof(Uint32) * current_mesh->index_count);
+
+        // =====================================================================
+        // 🟢 ASIGNACIÓN LIMPIA PARA EL INSPECTOR
+        // =====================================================================
+        // Forzamos la textura a NULL. El renderizador usará la 'default_texture'
+        // hasta que arrastres un .png o cargues la escena persistente.
+        current_mesh->texture = NULL;
+
+        // Creamos un Sampler Nearest retro por defecto para cuando le asignes textura
+        SDL_GPUSamplerCreateInfo samplerInfo = {
+            .min_filter = SDL_GPU_FILTER_NEAREST,
+            .mag_filter = SDL_GPU_FILTER_NEAREST,
+            .mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST,
+            .address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_REPEAT,
+            .address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_REPEAT,
+            .address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT
+        };
+        current_mesh->sampler = SDL_CreateGPUSampler(gpu_device, &samplerInfo);
+
+        free(vertices);
+        free(indices);
+    }
+
+    cgltf_free(data);
+    SDL_Log("KowaiEngine: Modelo Geométrico (GLB/GLTF) cargado con %d mallas puras.", model->mesh_count);
+    return model;
 }
 
 // --- FUNCIÓN PRINCIPAL DEL CARGADOR ---

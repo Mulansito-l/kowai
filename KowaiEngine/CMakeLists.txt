@@ -43,8 +43,23 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/backends/imgui_impl_sdlgpu3.cpp
 )
 
+# Asegúrate de mapear la ruta donde tienes descargado imguizmo
+set(IMGUIZMO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/imguizmo/src")
+
+# Archivos de ImGuizmo
+set(IMGUIZMO_SOURCES
+    ${IMGUIZMO_DIR}/ImGuizmo.cpp
+    # Agrega aquí otros archivos si la versión que bajaste incluye ImGradient, ImSequencer, etc.
+    # Para el gizmo básico de transformación, con ImGuizmo.cpp suele ser suficiente.
+)
+
 # 🟢 2. Crear librería estática (KowaiEngine.lib) INCLUYENDO las fuentes de NFD
-add_library(KowaiEngine STATIC ${ENGINE_SOURCES} ${IMGUI_SOURCES} ${NFD_SOURCES})
+add_library(KowaiEngine STATIC 
+    ${ENGINE_SOURCES} 
+    ${IMGUI_SOURCES} 
+    ${NFD_SOURCES} 
+    ${IMGUIZMO_SOURCES}
+)
 
 # Configurar rutas de inclusión de cabeceras de tu motor
 # 🟢 Agregamos la ruta de los headers de NFD (external/nfd/src/include) para que imgui_backend.cpp los vea
@@ -53,6 +68,7 @@ target_include_directories(KowaiEngine PUBLIC
     ${IMGUI_DIR} 
     ${IMGUI_DIR}/backends
     ${CMAKE_CURRENT_SOURCE_DIR}/external/nfd/src/include
+    ${IMGUIZMO_DIR} # 🟢 Agregamos la ruta para que compile ImGuizmo.h
 )
 
 # Vincular SDL3 de forma pública (Hereda SDL_GPU y todo el ecosistema)

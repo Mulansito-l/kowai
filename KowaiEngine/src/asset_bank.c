@@ -1,9 +1,11 @@
-#include "KowaiEngine/asset_bank.h"
+﻿#include "KowaiEngine/asset_bank.h"
 #include <string.h>
 #include <stdlib.h>
 
+SDL_GPUTexture* kowai_internal_load_texture(SDL_GPUDevice* gpu_device, const char* filepath);
+
 // -----------------------------------------------------
-// HASH SIMPLE (r�pido y suficiente para engine)
+// HASH SIMPLE (rápido y suficiente para engine)
 // -----------------------------------------------------
 static KowaiAssetID kowai_hash_id(const char* str)
 {
@@ -29,7 +31,7 @@ void kowai_asset_bank_init(KowaiAssetBank* bank)
         bank->slots[i].id[0] = '\0';
         bank->slots[i].hash = 0;
         bank->slots[i].type = ASSET_TYPE_NONE;
-        bank->slots[i].asset.raw_ptr = NULL; // ?? Limpia la uni�n entera apuntando a NULL
+        bank->slots[i].asset.raw_ptr = NULL; // ?? Limpia la unión entera apuntando a NULL
     }
 }
 
@@ -70,9 +72,6 @@ void kowai_asset_bank_clear(SDL_GPUDevice* device, KowaiAssetBank* bank)
     bank->asset_count = 0;
 }
 
-// -----------------------------------------------------
-// REGISTER GLTF (Modelos)
-// -----------------------------------------------------
 KowaiModel* kowai_asset_bank_register_gltf(
     SDL_GPUDevice* device,
     KowaiAssetBank* bank,
@@ -83,7 +82,7 @@ KowaiModel* kowai_asset_bank_register_gltf(
 
     KowaiAssetID hash = kowai_hash_id(id);
 
-    // Check duplicates (Validando que coincida hash y tipo)
+    // 1. Check duplicates (Validando que coincida hash y tipo)
     for (int i = 0; i < bank->asset_count; i++) {
         if (bank->slots[i].hash == hash && bank->slots[i].type == ASSET_TYPE_MODEL) {
             return bank->slots[i].asset.model;
@@ -95,18 +94,37 @@ KowaiModel* kowai_asset_bank_register_gltf(
         return NULL;
     }
 
-    KowaiModel* model = kowai_model_load_gltf(device, file_path);
+    // =====================================================================
+    // 🟢 NUEVO: DETECCIÓN EN CALIENTE DE EXTENSIÓN (.gltf vs .glb)
+    // =====================================================================
+    KowaiModel* model = NULL;
+    const char* ext = SDL_strrchr(file_path, '.');
+
+    if (ext && SDL_strcasecmp(ext, ".glb") == 0) {
+        // Carga binaria optimizada ignorando materiales/texturas internas
+        model = kowai_model_load_geometry_only(device, file_path);
+    }
+    else {
+        // Tu carga tradicional por defecto para archivos de texto .gltf
+        model = kowai_model_load_gltf(device, file_path);
+    }
+    // =====================================================================
+
     if (!model) {
         SDL_Log("AssetBank: failed loading %s", file_path);
         return NULL;
     }
 
+    // 2. Asignación al slot del Asset Bank
     int slot_idx = bank->asset_count++;
 
     bank->slots[slot_idx].hash = hash;
     SDL_strlcpy(bank->slots[slot_idx].id, id, sizeof(bank->slots[slot_idx].id));
-    bank->slots[slot_idx].type = ASSET_TYPE_MODEL;       // ?? Seteamos tipo
-    bank->slots[slot_idx].asset.model = model;           // ?? Guardamos en la uni�n
+    SDL_strlcpy(bank->slots[slot_idx].path, file_path, sizeof(bank->slots[slot_idx].path)); // Guardamos path para el Scene Save
+    bank->slots[slot_idx].type = ASSET_TYPE_MODEL;
+    bank->slots[slot_idx].asset.model = model;
+
+    SDL_Log("AssetBank: Registrado modelo '%s' desde [%s]", id, file_path);
 
     return model;
 }
@@ -124,7 +142,7 @@ KowaiModel* kowai_asset_bank_get_model(
 
     for (int i = 0; i < bank->asset_count; i++) {
         if (bank->slots[i].hash == hash && bank->slots[i].type == ASSET_TYPE_MODEL) {
-            return bank->slots[i].asset.model; // ?? Retorna desde la uni�n
+            return bank->slots[i].asset.model; // ?? Retorna desde la unión
         }
     }
 
@@ -132,7 +150,7 @@ KowaiModel* kowai_asset_bank_get_model(
 }
 
 // -----------------------------------------------------
-// REGISTER TEXTURE (Plantilla lista para usar)
+// REGISTER TEXTURE (Implementación Real con SDL3 GPU)
 // -----------------------------------------------------
 void* kowai_asset_bank_register_texture(
     SDL_GPUDevice* device,
@@ -140,34 +158,48 @@ void* kowai_asset_bank_register_texture(
     const char* id,
     const char* file_path)
 {
-    if (!bank || !id || !file_path) return NULL;
+    if (!device || !bank || !id || !file_path) return NULL;
 
+    // 1. Generar el hash único del identificador de la textura
     KowaiAssetID hash = kowai_hash_id(id);
 
+    // 2. Verificar si el recurso ya existe en el banco para no duplicar en VRAM
     for (int i = 0; i < bank->asset_count; i++) {
         if (bank->slots[i].hash == hash && bank->slots[i].type == ASSET_TYPE_TEXTURE) {
+            SDL_Log("AssetBank: La textura '%s' ya se encuentra cargada en memoria.", id);
             return bank->slots[i].asset.texture;
         }
     }
 
+    // 3. Control de límites del pool plano estático
     if (bank->asset_count >= MAX_ASSETS) {
-        SDL_Log("AssetBank: FULL");
+        SDL_Log("AssetBank Error: Capacidad máxima de recursos alcanzada (%d). No se puede registrar '%s'.", MAX_ASSETS, id);
         return NULL;
     }
 
-    // Aqu� llamar�as a tu cargador de texturas de SDL_GPU, ej:
-    // KowaiTexture* tex = kowai_texture_load(device, file_path);
-    void* tex = (void*)0xDEADBEEF; // Mock temporal para que compile y pruebes
+    // 4. 🎨 Cargar el archivo de imagen físico y subir los píxeles a la GPU
+    // Usamos directamente tu función auxiliar estática que maneja stbi_load y SDL_GPUCopyPass
+    SDL_GPUTexture* native_texture = kowai_internal_load_texture(device, file_path);
 
-    if (!tex) return NULL;
+    if (!native_texture) {
+        SDL_Log("AssetBank Error: No se pudieron cargar los píxeles o inicializar el recurso de textura en: %s", file_path);
+        return NULL;
+    }
 
+    // 5. Reservar el slot disponible e inyectar los metadatos y el puntero nativo de la GPU
     int slot_idx = bank->asset_count++;
     bank->slots[slot_idx].hash = hash;
     SDL_strlcpy(bank->slots[slot_idx].id, id, sizeof(bank->slots[slot_idx].id));
     bank->slots[slot_idx].type = ASSET_TYPE_TEXTURE;
-    bank->slots[slot_idx].asset.texture = tex;
 
-    return tex;
+    // Mapeamos el puntero SDL_GPUTexture* al campo .texture (void*) de la unión de tu asset slot
+    bank->slots[slot_idx].asset.texture = (void*)native_texture;
+
+    SDL_Log("VRAM: Textura '%s' registrada exitosamente desde disco físico en el slot [%d].", id, slot_idx);
+
+    SDL_strlcpy(bank->slots[slot_idx].path, file_path, sizeof(bank->slots[slot_idx].path));
+
+    return (void*)native_texture;
 }
 
 // -----------------------------------------------------

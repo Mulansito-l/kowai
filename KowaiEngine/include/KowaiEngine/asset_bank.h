@@ -1,4 +1,4 @@
-#ifndef KOWAI_ASSET_BANK_H
+Ôªø#ifndef KOWAI_ASSET_BANK_H
 #define KOWAI_ASSET_BANK_H
 
 #include "KowaiEngine/model.h"
@@ -7,11 +7,11 @@
 
 #include <SDL3/SDL.h>
 
-#define MAX_ASSETS 128 // ?? Subimos el lÌmite ya que ahora manejaremos texturas/audios
+#define MAX_ASSETS 128 // ?? Subimos el l√≠mite ya que ahora manejaremos texturas/audios
 
 typedef uint32_t KowaiAssetID;
 
-// ?? 1. EnumeraciÛn para identificar quÈ hay dentro del slot
+// ?? 1. Enumeraci√≥n para identificar qu√© hay dentro del slot
 typedef enum {
     ASSET_TYPE_NONE = 0,
     ASSET_TYPE_MODEL,
@@ -19,19 +19,20 @@ typedef enum {
     ASSET_TYPE_AUDIO
 } KowaiAssetType;
 
-// ?? 2. La UniÛn: El slot puede ser CUALQUIERA de estos, compartiendo la misma memoria
+// ?? 2. La Uni√≥n: El slot puede ser CUALQUIERA de estos, compartiendo la misma memoria
 typedef union {
     KowaiModel* model;
     void* texture; // Cambiar por KowaiTexture* cuando lo tengas
     void* audio;   // Cambiar por KowaiAudio* cuando lo tengas
-    void* raw_ptr; // Puntero genÈrico para limpiezas r·pidas
+    void* raw_ptr; // Puntero gen√©rico para limpiezas r√°pidas
 } KowaiAssetPtr;
 
 typedef struct {
     KowaiAssetID hash;
     char id[64];           // "cat_statue", "michi_albedo", "meow_sfx"
+    char path[256];        // NUEVO: Guardamos la ruta f√≠sica, ej: "assets/models/cat.gltf"
     KowaiAssetType type;   // ?? Tipo de asset guardado en este slot
-    KowaiAssetPtr  asset;  // ?? Puntero polimÛrfico union
+    KowaiAssetPtr  asset;  // ?? Puntero polim√≥rfico union
 } KowaiAssetSlot;
 
 typedef struct KowaiAssetBank {

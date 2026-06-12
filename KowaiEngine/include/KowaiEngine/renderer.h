@@ -22,10 +22,17 @@ void kowai_renderer_end_render_pass(KowaiRenderer* renderer);
 
 void kowai_renderer_end_frame(KowaiRenderer* renderer);
 
+void kowai_renderer_set_environment(KowaiRenderer* renderer, float* clear, float* sun_dir, float* sun_col, float* ambient);
+
 SDL_GPUDevice* kowai_renderer_get_device(KowaiRenderer* renderer);
 SDL_GPUCommandBuffer* kowai_renderer_get_current_cmd_buffer(KowaiRenderer* renderer);
 SDL_GPURenderPass* kowai_renderer_get_current_render_pass(KowaiRenderer* renderer);
 
-void kowai_renderer_draw_model(KowaiRenderer* renderer, KowaiModel* model, mat4 model_matrix, KowaiCamera* camera);
+void kowai_renderer_draw_model(
+    KowaiRenderer* renderer,
+    KowaiModel* model,
+    mat4 model_matrix,
+    KowaiCamera* camera,
+    struct KowaiScene* scene);
 
 #endif // KOWAI_RENDERER_H

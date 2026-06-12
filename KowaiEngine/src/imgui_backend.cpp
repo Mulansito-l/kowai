@@ -4,6 +4,7 @@
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_sdlgpu3.h"
 #include <nfd.h>
+#include <ImGuizmo.h>
 
 extern "C" {
 
@@ -12,11 +13,13 @@ extern "C" {
     #include "KowaiEngine/asset_bank.h"
     #include "KowaiEngine/entity.h"
     #include "KowaiEngine/renderer.h"
+    #include "KowaiEngine/camera.h"
 
     struct KowaiRenderer* kowai_get_renderer(KowaiEngine* engine);
     static void imgui_backend_render_file_tree(KowaiAssetBank* asset_bank, const char* current_dir_path);
     void kowai_entity_remove_component(KowaiEntity* entity, KowaiComponentType type);
     void imgui_backend_draw_asset_browser(KowaiEngine* engine, KowaiAssetBank* asset_bank);
+    void imgui_backend_draw_hierarchy_node(KowaiScene* scene, KowaiEntity* entity, int* seleccionado_idx);
 
     void imgui_backend_init(SDL_Window* window, SDL_GPUDevice* device, SDL_GPUTextureFormat format) {
         IMGUI_CHECKVERSION();
@@ -100,21 +103,13 @@ extern "C" {
                     SDL_snprintf(label, sizeof(label), "🖼️ %s", name);
                     ImGui::Selectable(label, false);
 
-                    // 🟢 DRAG SOURCE: Arrastrar textura
+                    // 🟢 DRAG SOURCE OPTIMIZADO PARA CARGA BAJO DEMANDA
                     if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
-                        char asset_id[64];
-                        SDL_strlcpy(asset_id, name, sizeof(asset_id));
-                        char* dot = SDL_strrchr(asset_id, '.');
-                        if (dot) *dot = '\0';
+                        // Ahora enviamos la ruta del archivo físico, igual que con los modelos
+                        ImGui::SetDragDropPayload("DND_FILE_PATH", full_path, SDL_strlen(full_path) + 1);
 
-                        void* texture = kowai_asset_bank_get_texture(asset_bank, asset_id);
-                        if (texture) {
-                            ImGui::SetDragDropPayload("DND_TEXTURE", &texture, sizeof(void*));
-                            ImGui::Text("Arrastrando textura: %s", asset_id);
-                        }
-                        else {
-                            ImGui::TextDisabled("(No cargada: %s)", asset_id);
-                        }
+                        ImGui::Text("Preparando textura: %s", name);
+                        ImGui::TextDisabled("(Se cargará en VRAM al soltar)");
                         ImGui::EndDragDropSource();
                     }
                 }
@@ -135,8 +130,8 @@ extern "C" {
     }
 
     // -----------------------------------------------------
-// DEV TOOLS MAIN FUNCTION
-// -----------------------------------------------------
+    // DEV TOOLS MAIN FUNCTION
+    // -----------------------------------------------------
     void imgui_backend_build_devtools(KowaiEngine* engine, float delta_time) {
         if (!engine) return;
 
@@ -144,6 +139,9 @@ extern "C" {
         KowaiAssetBank* asset_bank = kowai_engine_get_asset_bank(engine);
         const char* project_path = kowai_engine_get_project_path(engine);
         KowaiScene* scene = kowai_engine_get_active_scene(engine);
+
+        // Estado local para abrir la ventana de ajustes globales
+        static bool mostrar_ajustes_escena = false;
 
         // =========================================================================
         // 🟢 TOP BAR CONFIGURADA ESTILO UNITY
@@ -196,7 +194,7 @@ extern "C" {
                     nfdresult_t result = NFD_OpenDialog("kscene", project_path, &outPath);
 
                     if (result == NFD_OKAY) {
-                        KowaiScene* cargada = kowai_scene_load(outPath, asset_bank);
+                        KowaiScene* cargada = kowai_scene_load(outPath, asset_bank, kowai_renderer_get_device(kowai_get_renderer(engine)));
                         if (cargada) {
                             if (scene) {
                                 kowai_scene_destroy(scene);
@@ -208,23 +206,54 @@ extern "C" {
                     }
                 }
 
-                if (ImGui::MenuItem("Guardar Escena Actual", "Ctrl+S", false, scene != NULL)) {
-                    nfdchar_t* outPath = NULL;
-                    nfdresult_t result = NFD_SaveDialog("kscene", project_path, &outPath);
+                // =====================================================================
+                // 💾 OPCIÓN 1: GUARDAR ESCENA (Directo si ya existe, si no, abre diálogo)
+                // =====================================================================
+                if (ImGui::MenuItem("Guardar Escena", "Ctrl+S", false, scene != NULL)) {
+                    if (scene) {
+                        // Si la escena ya tiene una ruta asignada (fue cargada o guardada previamente)
+                        if (scene->current_filepath[0] != '\0') {
+                            kowai_scene_save(scene, asset_bank, scene->current_filepath);
+                            SDL_Log("Editor: Escena guardada rápidamente en: %s", scene->current_filepath);
+                        }
+                        else {
+                            // Si es una escena completamente nueva ('Nueva Escena'), disparamos el diálogo obligatoriamente
+                            nfdchar_t* outPath = NULL;
+                            nfdresult_t result = NFD_SaveDialog("kscene", project_path, &outPath);
 
-                    if (result == NFD_OKAY) {
-                        if (scene) {
+                            if (result == NFD_OKAY) {
+                                char finalPath[512];
+                                ensure_kscene_extension(outPath, finalPath, sizeof(finalPath));
+
+                                kowai_scene_save(scene, asset_bank, finalPath);
+                                free(outPath);
+                            }
+                        }
+                    }
+                }
+
+                // =====================================================================
+                // 💾 OPCIÓN 2: GUARDAR ESCENA COMO... (Siempre fuerza el File Dialog)
+                // =====================================================================
+                if (ImGui::MenuItem("Guardar Escena Como...", "Ctrl+Shift+S", false, scene != NULL)) {
+                    if (scene) {
+                        nfdchar_t* outPath = NULL;
+                        nfdresult_t result = NFD_SaveDialog("kscene", project_path, &outPath);
+
+                        if (result == NFD_OKAY) {
                             char finalPath[512];
                             ensure_kscene_extension(outPath, finalPath, sizeof(finalPath));
+
                             kowai_scene_save(scene, asset_bank, finalPath);
+                            free(outPath);
                         }
-                        free(outPath);
                     }
                 }
 
                 ImGui::Separator();
 
                 if (ImGui::MenuItem("Salir del Motor", "Alt+F4")) {
+
                     // Modificar bandera de cierre aquí si es necesario
                 }
 
@@ -232,30 +261,22 @@ extern "C" {
             }
 
             // --- MENÚ: ESCENA (GAME OBJECTS) ---
-            if (ImGui::BeginMenu("Escena", scene != NULL)) { // El menú se deshabilita si no hay escena activa
-
+            if (ImGui::BeginMenu("Escena", scene != NULL)) {
                 if (ImGui::MenuItem("Spawnear Entidad Vacía")) {
                     kowai_scene_create_entity(scene, "Nueva Entidad");
                 }
-
-                if (ImGui::MenuItem("Spawnear Estatua de Gato (Michi)")) {
-                    char buffer_nombre[32];
-                    SDL_snprintf(buffer_nombre, sizeof(buffer_nombre), "Michi_%d", scene->entity_count);
-
-                    KowaiEntity* e = kowai_scene_create_entity(scene, buffer_nombre);
-                    if (e) {
-                        KowaiModel* michi_model = kowai_asset_bank_get_model(asset_bank, "cat_statue");
-                        uint32_t id = e->id;
-                        scene->meshes[id].model = michi_model;
-                        scene->meshes[id].is_visible = true;
-                        kowai_entity_add_component(e, COMPONENT_MESH_RENDER, &scene->meshes[id]);
-                    }
-                }
-
                 ImGui::EndMenu();
             }
 
-            // --- 🟢 INDICADOR DE ESCENA ABIERTA EN LA TOP BAR ---
+            // --- 🟢 NUEVO MENÚ: CONFIGURACIÓN (ENTORNO GLOBAL) ---
+            if (ImGui::BeginMenu("Configuración", scene != NULL)) {
+                if (ImGui::MenuItem("Ajustes de Entorno / Luz...", NULL, mostrar_ajustes_escena)) {
+                    mostrar_ajustes_escena = !mostrar_ajustes_escena;
+                }
+                ImGui::EndMenu();
+            }
+
+            // --- INDICADOR DE ESCENA ABIERTA EN LA TOP BAR ---
             ImGui::Separator();
             if (scene != NULL) {
                 ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), "🎬 Escena Activa: [%s]", scene->name);
@@ -266,6 +287,38 @@ extern "C" {
             }
 
             ImGui::EndMainMenuBar();
+        }
+
+        // =========================================================================
+        // 🟢 NUEVA VENTANA FLOATING: AJUSTES DE ENTORNO (ENVIRONMENT / LIGHTING)
+        // =========================================================================
+        if (mostrar_ajustes_escena && scene != NULL) {
+            ImGui::Begin("⚙️ Ajustes del Entorno", &mostrar_ajustes_escena, ImGuiWindowFlags_AlwaysAutoResize);
+
+            ImGui::SeparatorText("Iluminación Global (Sol)");
+
+            // Asumiendo que tu struct de Scene almacena la dirección del sol. Si no, usa variables static por mientras
+            // Nota: El tercer float (intensidad/velocidad del drag) lo dejamos en 0.05f para control fino
+            ImGui::DragFloat3("Dirección Sol", scene->sun_direction, 0.02f, -1.0f, 1.0f, "%.2f");
+            ImGui::ColorEdit3("Color Sol", scene->sun_color);
+
+            ImGui::Spacing();
+            ImGui::SeparatorText("Ambiente Retro");
+            ImGui::ColorEdit3("Luz Ambiental", scene->ambient_color);
+
+            // Si usas un color de fondo limpio para el cielo (Clear Color) o quieres simular el Skydome degradado
+            ImGui::ColorEdit3("Color del Cielo (Clear)", scene->sky_clear_color);
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            if (ImGui::Button("Restablecer Valores Por Defecto", ImVec2(-1, 24))) {
+                scene->sun_direction[0] = 0.5f;  scene->sun_direction[1] = 1.0f;  scene->sun_direction[2] = 0.3f;
+                scene->sun_color[0] = 1.0f;      scene->sun_color[1] = 1.0f;      scene->sun_color[2] = 1.0f;
+                scene->ambient_color[0] = 0.2f;  scene->ambient_color[1] = 0.2f;  scene->ambient_color[2] = 0.2f;
+                scene->sky_clear_color[0] = 0.1f; scene->sky_clear_color[1] = 0.1f; scene->sky_clear_color[2] = 0.15f;
+            }
+
+            ImGui::End();
         }
 
         // --- VENTANA 1: ESTADÍSTICAS ---
@@ -283,7 +336,7 @@ extern "C" {
         ImGui::End();
 
         // =========================================================================
-        // 🟢 VENTANA 2 RESTAURADA: EXPLORADOR DE RECURSOS (VFS)
+        // VENTANA 2 RESTAURADA: EXPLORADOR DE RECURSOS (VFS)
         // =========================================================================
         imgui_backend_draw_asset_browser(engine, asset_bank);
 
@@ -293,34 +346,39 @@ extern "C" {
 
         if (scene != NULL) {
             // -----------------------------------------------------------------
-            // COLUMNA IZQUIERDA: JERARQUÍA (Con soporte para eliminar entidad)
-            // -----------------------------------------------------------------
+        // COLUMNA IZQUIERDA: JERARQUÍA (SCENE GRAPH ARBOREO)
+        // -----------------------------------------------------------------
             ImGui::BeginChild("Hierarchy", ImVec2(200, 0), true);
+
             for (int i = 0; i < MAX_ENTITIES_PER_SCENE; i++) {
-                if (scene->entities[i].name[0] != '\0') {
-                    char label_imgui[64];
-                    SDL_snprintf(label_imgui, sizeof(label_imgui), "%s##ent_%d", scene->entities[i].name, i);
-
-                    // Guardamos la selección
-                    if (ImGui::Selectable(label_imgui, seleccionado_idx == i)) {
-                        seleccionado_idx = i;
-                    }
-
-                    if (ImGui::BeginPopupContextItem()) {
-                        if (ImGui::MenuItem("❌ Eliminar Entidad")) {
-                            SDL_Log("ECS: Destruyendo entidad '%s' (ID: %d)", scene->entities[i].name, i);
-
-                            // FIX: Pasamos el id numérico puro tal como dicta tu firma de C
-                            kowai_scene_destroy_entity(scene, scene->entities[i].id);
-
-                            if (seleccionado_idx == i) {
-                                seleccionado_idx = -1;
-                            }
-                        }
-                        ImGui::EndPopup();
-                    }
+                // Dibujamos solo las raíces vivas
+                if (scene->entities[i].name[0] != '\0' && scene->entities[i].parent == NULL) {
+                    imgui_backend_draw_hierarchy_node(scene, &scene->entities[i], &seleccionado_idx);
                 }
             }
+
+            // 🟢 TRUCO CLAVE: Creamos un espacio invisible que rellena TODO lo que sobra del panel.
+            // Esto asegura que haya un área enorme abajo para soltar cosas y des-emparentar.
+            ImVec2 espacio_disponible = ImGui::GetContentRegionAvail();
+            if (espacio_disponible.y > 0.0f) {
+                ImGui::Dummy(espacio_disponible);
+            }
+
+            // El Drag and Drop Target ahora se aplica a TODA la ventana, incluyendo el Dummy invisible
+            if (ImGui::BeginDragDropTarget()) {
+                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_ENTITY_INDEX")) {
+                    int arrastrado_idx = *(const int*)payload->Data;
+                    KowaiEntity* hijo = &scene->entities[arrastrado_idx];
+
+                    // Si la soltamos aquí en el vacío y tenía un padre, la liberamos
+                    if (hijo->parent != NULL) {
+                        kowai_entity_set_parent(hijo, NULL);
+                        SDL_Log("Editor: '%s' extraído a la raíz de la escena.", hijo->name);
+                    }
+                }
+                ImGui::EndDragDropTarget();
+            }
+
             ImGui::EndChild();
 
             ImGui::SameLine();
@@ -332,7 +390,6 @@ extern "C" {
             if (seleccionado_idx != -1 && scene->entities[seleccionado_idx].name[0] != '\0') {
                 KowaiEntity* e = &scene->entities[seleccionado_idx];
 
-                // 📝 Modificar Nombre de la Entidad directamente en la parte superior
                 ImGui::Text("GameObject:"); ImGui::SameLine();
                 ImGui::InputText("##EntityName", e->name, sizeof(e->name));
                 ImGui::Separator();
@@ -374,35 +431,130 @@ extern "C" {
 
                         const char* model_id = kowai_asset_bank_get_id_from_model(asset_bank, m->model);
                         char mesh_label[128];
-                        SDL_snprintf(mesh_label, sizeof(mesh_label), "Model: %s", m->model ? model_id : "[Ninguno - Suelta un .gltf aquí]");
+                        SDL_snprintf(mesh_label, sizeof(mesh_label), "Model: %s", m->model ? model_id : "[Ninguno - Suelta un .gltf/.glb aquí]");
                         ImGui::Button(mesh_label, ImVec2(-1, 26));
 
-                        // Drop target para assets
                         if (ImGui::BeginDragDropTarget()) {
                             if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_FILE_PATH")) {
                                 const char* file_path_arrastrado = (const char*)payload->Data;
+                                const char* ext = SDL_strrchr(file_path_arrastrado, '.');
 
-                                const char* filename = SDL_strrchr(file_path_arrastrado, '/');
-                                if (!filename) filename = SDL_strrchr(file_path_arrastrado, '\\');
-                                filename = filename ? filename + 1 : file_path_arrastrado;
+                                if (ext && (SDL_strcasecmp(ext, ".gltf") == 0 ||
+                                    SDL_strcasecmp(ext, ".glb") == 0 ||
+                                    SDL_strcasecmp(ext, ".obj") == 0))
+                                {
+                                    const char* filename = SDL_strrchr(file_path_arrastrado, '/');
+                                    if (!filename) filename = SDL_strrchr(file_path_arrastrado, '\\');
+                                    filename = filename ? filename + 1 : file_path_arrastrado;
 
-                                char asset_id[64];
-                                SDL_strlcpy(asset_id, filename, sizeof(asset_id));
-                                char* dot = SDL_strrchr(asset_id, '.');
-                                if (dot) *dot = '\0';
+                                    char asset_id[64];
+                                    SDL_strlcpy(asset_id, filename, sizeof(asset_id));
+                                    char* dot = SDL_strrchr(asset_id, '.');
+                                    if (dot) *dot = '\0';
 
-                                KowaiModel* model = kowai_asset_bank_get_model(asset_bank, asset_id);
-                                if (!model) {
                                     SDL_GPUDevice* device = kowai_renderer_get_device(kowai_get_renderer(engine));
-                                    model = kowai_asset_bank_register_gltf(device, asset_bank, asset_id, file_path_arrastrado);
-                                }
-                                if (model) {
-                                    m->model = model;
-                                    m->is_visible = true;
+
+                                    KowaiModel* model = kowai_asset_bank_get_model(asset_bank, asset_id);
+                                    if (!model) {
+                                        model = kowai_asset_bank_register_gltf(device, asset_bank, asset_id, file_path_arrastrado);
+                                    }
+
+                                    if (model) {
+                                        m->model = model;
+                                        m->is_visible = true;
+                                        SDL_Log("Editor: Modelo '%s' inyectado con éxito en la entidad.", asset_id);
+                                    }
                                 }
                             }
                             ImGui::EndDragDropTarget();
                         }
+
+                        if (m->model) {
+                            ImGui::Spacing();
+                            ImGui::SeparatorText("Sub-Mallas / Texturas");
+
+                            for (Uint32 i = 0; i < m->model->mesh_count; i++) {
+                                KowaiMesh* mesh = &m->model->meshes[i];
+                                ImGui::PushID(i);
+
+                                char slot_label[128];
+                                if (mesh->texture) {
+                                    SDL_snprintf(slot_label, sizeof(slot_label), "Malla [%d]: [Asignada - %p]", i, mesh->texture);
+                                }
+                                else {
+                                    SDL_snprintf(slot_label, sizeof(slot_label), "Malla [%d]: [Color Plano / Fallback]", i);
+                                }
+
+                                ImGui::Button(slot_label, ImVec2(-1, 24));
+
+                                if (ImGui::BeginDragDropTarget()) {
+                                    if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_FILE_PATH")) {
+                                        const char* file_path_arrastrado = (const char*)payload->Data;
+                                        const char* ext = SDL_strrchr(file_path_arrastrado, '.');
+
+                                        if (ext && (SDL_strcasecmp(ext, ".png") == 0 || SDL_strcasecmp(ext, ".jpg") == 0)) {
+                                            const char* filename = SDL_strrchr(file_path_arrastrado, '/');
+                                            if (!filename) filename = SDL_strrchr(file_path_arrastrado, '\\');
+                                            filename = filename ? filename + 1 : file_path_arrastrado;
+
+                                            char asset_id[64];
+                                            SDL_strlcpy(asset_id, filename, sizeof(asset_id));
+                                            char* dot = SDL_strrchr(asset_id, '.');
+                                            if (dot) *dot = '\0';
+
+                                            SDL_GPUDevice* device = kowai_renderer_get_device(kowai_get_renderer(engine));
+
+                                            void* texture = kowai_asset_bank_get_texture(asset_bank, asset_id);
+                                            if (!texture) {
+                                                texture = kowai_asset_bank_register_texture(device, asset_bank, asset_id, file_path_arrastrado);
+                                            }
+
+                                            if (texture) {
+                                                mesh->texture = (SDL_GPUTexture*)texture;
+
+                                                if (mesh->sampler) {
+                                                    SDL_ReleaseGPUSampler(device, mesh->sampler);
+                                                }
+
+                                                SDL_GPUSamplerCreateInfo samplerInfo{};
+                                                samplerInfo.min_filter = SDL_GPU_FILTER_NEAREST;
+                                                samplerInfo.mag_filter = SDL_GPU_FILTER_NEAREST;
+                                                samplerInfo.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
+                                                samplerInfo.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
+                                                samplerInfo.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
+                                                samplerInfo.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
+                                                mesh->sampler = SDL_CreateGPUSampler(device, &samplerInfo);
+
+                                                SDL_Log("Editor: Textura inyectada en sub-malla index [%d].", i);
+                                            }
+                                        }
+                                    }
+                                    ImGui::EndDragDropTarget();
+                                }
+                                ImGui::PopID();
+                            }
+                        }
+                    }
+                    ImGui::Spacing();
+                }
+
+                // --- 🟢 3. NUEVO: Light Component ---
+                LightComponent* l = (LightComponent*)kowai_entity_get_component(e, COMPONENT_LIGHT);
+                if (l) {
+                    bool open = ImGui::CollapsingHeader("💡 Light Component (Point Light)", ImGuiTreeNodeFlags_DefaultOpen);
+
+                    // Menú contextual para remover el componente con click derecho
+                    if (ImGui::BeginPopupContextItem("LightMenu")) {
+                        if (ImGui::MenuItem("Remover LightComponent")) {
+                            kowai_entity_remove_component(e, COMPONENT_LIGHT);
+                        }
+                        ImGui::EndPopup();
+                    }
+
+                    if (open) {
+                        ImGui::ColorEdit3("Color Luz", l->color);
+                        ImGui::DragFloat("Intensidad", &l->intensity, 0.05f, 0.0f, 20.0f, "%.2f");
+                        ImGui::DragFloat("Radio de Alcance", &l->radius, 0.1f, 0.1f, 100.0f, "%.1f u");
                     }
                     ImGui::Spacing();
                 }
@@ -410,7 +562,6 @@ extern "C" {
                 // --- BOTÓN: ADD COMPONENT ---
                 ImGui::Separator();
                 ImGui::Spacing();
-
                 ImGui::NewLine(); ImGui::SameLine(ImGui::GetWindowWidth() * 0.25f);
                 if (ImGui::Button("➕ Add Component", ImVec2(ImGui::GetWindowWidth() * 0.5f, 30))) {
                     ImGui::OpenPopup("AddComponentPopup");
@@ -427,7 +578,6 @@ extern "C" {
                             scene->transforms[id].rotation[0] = 0.0f; scene->transforms[id].rotation[1] = 0.0f; scene->transforms[id].rotation[2] = 0.0f;
                             scene->transforms[id].scale[0] = 1.0f;    scene->transforms[id].scale[1] = 1.0f;    scene->transforms[id].scale[2] = 1.0f;
                             kowai_transform_update_matrix(&scene->transforms[id]);
-
                             kowai_entity_add_component(e, COMPONENT_TRANSFORM, &scene->transforms[id]);
                         }
                     }
@@ -437,11 +587,25 @@ extern "C" {
                             uint32_t id = e->id;
                             scene->meshes[id].model = NULL;
                             scene->meshes[id].is_visible = false;
-
                             kowai_entity_add_component(e, COMPONENT_MESH_RENDER, &scene->meshes[id]);
                         }
                     }
 
+                    // 🟢 NUEVA OPCIÓN: Agregar Light Component si la entidad no tiene uno ya asignado
+                    if (!l) {
+                        if (ImGui::MenuItem("💡 Light Component")) {
+                            uint32_t id = e->id;
+                            // Inicialización con valores retro estándar funcionales
+                            scene->lights[id].color[0] = 1.0f;
+                            scene->lights[id].color[1] = 1.0f;
+                            scene->lights[id].color[2] = 0.8f; // Blanco cálido por defecto
+                            scene->lights[id].intensity = 1.0f;
+                            scene->lights[id].radius = 10.0f;
+
+                            kowai_entity_add_component(e, COMPONENT_LIGHT, &scene->lights[id]);
+                            SDL_Log("Editor: LightComponent acoplado a la entidad '%s' (ID: %d)", e->name, id);
+                        }
+                    }
                     ImGui::EndPopup();
                 }
             }
@@ -451,6 +615,56 @@ extern "C" {
             ImGui::Text("Crea o carga una escena desde el menú 'Archivo' para inspeccionar.");
         }
         ImGui::End();
+
+        if (scene != NULL && seleccionado_idx != -1 && scene->entities[seleccionado_idx].name[0] != '\0') {
+            KowaiEntity* e = &scene->entities[seleccionado_idx];
+            TransformComponent* t = (TransformComponent*)kowai_entity_get_component(e, COMPONENT_TRANSFORM);
+
+            // Solo podemos transformar cosas que tengan un componente Transform asignado
+            if (t) {
+                // 1. Inicializar ImGuizmo para el frame actual
+                ImGuizmo::BeginFrame();
+
+                // Configuramos que se dibuje en toda la pantalla (o puedes limitarlo al tamaño de tu render)
+                ImGuiIO& io = ImGui::GetIO();
+                ImGuizmo::SetRect(0, 0, io.DisplaySize.x, io.DisplaySize.y);
+
+                // 2. Extraer las matrices de tu cámara y motor (cglm usa arreglos planos compatibles)
+                // Nota: Asegúrate de tener getters o acceso a estas matrices desde engine->camera
+                // Si tus matrices están en formato de cglm (mat4), se pueden pasar directo como (float*)
+                float* view_matrix = (float*)kowai_engine_get_active_camera(engine)->view_matrix;
+                float* proj_matrix = (float*)kowai_engine_get_active_camera(engine)->proj_matrix;
+
+                // Matriz del objeto actual que vamos a manipular
+                float* model_matrix = (float*)t->global_matrix;
+
+                // 3. Atajos de teclado estilo Unity para cambiar de herramienta (Opcional pero muy cómodo)
+                static ImGuizmo::OPERATION operacion_actual = ImGuizmo::TRANSLATE;
+                if (ImGui::IsKeyPressed(ImGuiKey_W)) operacion_actual = ImGuizmo::TRANSLATE; // W = Mover
+                if (ImGui::IsKeyPressed(ImGuiKey_E)) operacion_actual = ImGuizmo::ROTATE;    // E = Rotar
+                if (ImGui::IsKeyPressed(ImGuiKey_R)) operacion_actual = ImGuizmo::SCALE;     // R = Escalar
+
+                // 4. Dibujar e interactuar con el Gizmo
+                // Usamos la coordenada LOCAL para que las flechas giren junto al objeto, o WORLD para ejes fijos
+                if (ImGuizmo::Manipulate(view_matrix, proj_matrix, operacion_actual, ImGuizmo::LOCAL, model_matrix)) {
+
+                    // 5. SI EL USUARIO ARRASTRÓ EL GIZMO:
+                    // Descomponemos la nueva matriz modificada de vuelta a variables independientes de posición, rotación y escala
+                    float nueva_pos[3], nueva_rot[3], nueva_scale[3];
+                    ImGuizmo::DecomposeMatrixToComponents(model_matrix, nueva_pos, nueva_rot, nueva_scale);
+
+                    // Copiamos los valores de vuelta a tu componente Transform para que el render lo note
+                    for (int i = 0; i < 3; i++) {
+                        t->position[i] = nueva_pos[i];
+                        t->rotation[i] = nueva_rot[i];
+                        t->scale[i] = nueva_scale[i];
+                    }
+
+                    // Forzamos la actualización interna de las matrices normales y el modelo
+                    kowai_transform_update_matrix(t);
+                }
+            }
+        }
 
         ImGui::Render();
     }
@@ -466,6 +680,93 @@ extern "C" {
         imgui_backend_render_file_tree(asset_bank, assets_root);
 
         ImGui::End();
+    }
+
+    void imgui_backend_draw_hierarchy_node(KowaiScene* scene, KowaiEntity* entity, int* seleccionado_idx)
+    {
+        int actual_idx = (int)(entity - scene->entities);
+
+        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick;
+
+        if (*seleccionado_idx == actual_idx) {
+            flags |= ImGuiTreeNodeFlags_Selected;
+        }
+
+        // Determinar si es una hoja ANTES de crear el nodo
+        bool es_hoja = (entity->first_child == NULL);
+        if (es_hoja) {
+            flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+        }
+
+        bool nodo_abierto = ImGui::TreeNodeEx((void*)(intptr_t)actual_idx, flags, entity->name);
+
+        if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
+            *seleccionado_idx = actual_idx;
+        }
+
+        // -----------------------------------------------------------------
+        // DRAG AND DROP SOURCE
+        // -----------------------------------------------------------------
+        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
+            ImGui::SetDragDropPayload("DND_ENTITY_INDEX", &actual_idx, sizeof(int));
+            ImGui::Text("Mover entidad: %s", entity->name);
+            ImGui::EndDragDropSource();
+        }
+
+        // -----------------------------------------------------------------
+        // DRAG AND DROP TARGET
+        // -----------------------------------------------------------------
+        if (ImGui::BeginDragDropTarget()) {
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_ENTITY_INDEX")) {
+                int arrastrado_idx = *(const int*)payload->Data;
+
+                if (arrastrado_idx != actual_idx) {
+                    KowaiEntity* hijo = &scene->entities[arrastrado_idx];
+
+                    bool es_ancestro = false;
+                    KowaiEntity* check = entity->parent;
+                    while (check != NULL) {
+                        if (check == hijo) {
+                            es_ancestro = true;
+                            break;
+                        }
+                        check = check->parent;
+                    }
+
+                    if (!es_ancestro) {
+                        kowai_entity_set_parent(hijo, entity);
+                        SDL_Log("Editor: '%s' es ahora hijo de '%s'", hijo->name, entity->name);
+                    }
+                    else {
+                        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Editor: Ciclo jerárquico evitado.");
+                    }
+                }
+            }
+            ImGui::EndDragDropTarget();
+        }
+
+        // Menú contextual
+        if (ImGui::BeginPopupContextItem()) {
+            if (ImGui::MenuItem("❌ Eliminar Entidad")) {
+                SDL_Log("ECS: Destruyendo entidad '%s' (ID: %d)", entity->name, actual_idx);
+                kowai_scene_destroy_entity(scene, entity->id);
+                if (*seleccionado_idx == actual_idx) {
+                    *seleccionado_idx = -1;
+                }
+            }
+            ImGui::EndPopup();
+        }
+
+        // 🟢 SOLUCIÓN AL CRASH: 
+        // Solo renderizamos hijos y hacemos TreePop si el nodo está abierto Y NO era una hoja que activó NoTreePushOnOpen
+        if (nodo_abierto && !es_hoja) {
+            KowaiEntity* hijo = entity->first_child;
+            while (hijo != NULL) {
+                imgui_backend_draw_hierarchy_node(scene, hijo, seleccionado_idx);
+                hijo = hijo->next_sibling;
+            }
+            ImGui::TreePop(); // Ahora solo se llamará si ImGui realmente hizo un Push
+        }
     }
 
     void imgui_backend_prepare(SDL_GPUCommandBuffer* cmd) {

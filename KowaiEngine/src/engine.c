@@ -141,10 +141,42 @@ void kowai_update(KowaiEngine* engine) {
     SDL_GetWindowSizeInPixels(engine->window, &w, &h);
     kowai_camera_update_matrices(engine->active_camera, w, h);
 
+    if (engine->active_scene != NULL) {
+        KowaiScene* scene = engine->active_scene;
+
+        for (int i = 0; i < MAX_ENTITIES_PER_SCENE; i++) {
+            // Recorremos SOLO las entidades que están vivas Y que son RAÍZ (no tienen padre)
+            if (scene->entities[i].name[0] != '\0' && scene->entities[i].parent == NULL) {
+
+                // Al actualizar la raíz, su función recursiva interna se encargará de
+                // bajar en cascada por todos los 'first_child' y 'next_sibling'
+                // calculando las matrices globales perfectas de los hijos.
+                kowai_transform_update_matrix(&scene->entities[i]);
+            }
+        }
+    }
+
     // 6. PIPELINE DE RENDERIZADO
     if (kowai_renderer_begin_frame(engine->renderer, engine->window))
     {
+        // 🟢 INYECCIÓN DE ENTORNO: Pasamos los datos de la escena al renderer antes de los pases.
+        // Si no hay escena activa, pasamos NULL para que el renderer use sus propios fallbacks por defecto.
+        if (engine->active_scene) {
+            KowaiScene* scene = engine->active_scene;
+            kowai_renderer_set_environment(
+                engine->renderer,
+                scene->sky_clear_color,
+                scene->sun_direction,
+                scene->sun_color,
+                scene->ambient_color
+            );
+        }
+        else {
+            kowai_renderer_set_environment(engine->renderer, NULL, NULL, NULL, NULL);
+        }
+
         // PASS 1: Dibujar mundo 3D (Solo si hay una escena activa cargada)
+        // Ahora kowai_renderer_begin_render_pass_3d usará internamente el color guardado en el paso anterior.
         kowai_renderer_begin_render_pass_3d(engine->renderer);
 
         if (engine->active_scene) {
@@ -156,22 +188,15 @@ void kowai_update(KowaiEngine* engine) {
                 // Si el slot está vacío, lo saltamos
                 if (!entity->name || entity->name[0] == '\0') continue;
 
-                // 🟢 SOLUCIÓN: En lugar de preguntar al sistema ECS dinámico,
-                // accedemos directamente a los arreglos de datos usando la ID real de la entidad
                 uint32_t id = entity->id;
 
                 // Extraemos las referencias directas desde los pools de la escena
-                TransformComponent* transform = &scene->transforms[id]; // Ajusta el nombre si se llama diferente en tu Scene struct (ej: scene->transforms)
+                TransformComponent* transform = &scene->transforms[id];
                 MeshRenderComponent* mesh_render = &scene->meshes[id];
 
                 // Validamos si la malla tiene un modelo cargado y está marcada como visible
                 if (mesh_render->model && mesh_render->is_visible) {
-                    kowai_renderer_draw_model(
-                        engine->renderer,
-                        mesh_render->model,
-                        transform->matrix, // Mandamos su matriz TRS actualizada
-                        engine->active_camera
-                    );
+                    kowai_renderer_draw_model(engine->renderer, mesh_render->model, transform->global_matrix, engine->active_camera, engine->active_scene);
                 }
             }
         }
@@ -243,6 +268,11 @@ void kowai_engine_set_active_scene(KowaiEngine* engine, KowaiScene* scene) {
         engine->active_scene = scene;
         SDL_Log("KowaiEngine: Escena '%s' enlazada al motor con exito.", scene ? scene->name : "NULL");
     }
+}
+
+KowaiCamera* kowai_engine_get_active_camera(KowaiEngine* engine)
+{
+    return engine ? engine->active_camera : NULL;
 }
 
 void kowai_engine_set_project_path(KowaiEngine* engine, const char* path) {
