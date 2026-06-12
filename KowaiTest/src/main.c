@@ -19,16 +19,6 @@ int main(int argc, char* argv[]) {
     // Asegúrate de que la ruta termine en barra diagonal '\'
     kowai_engine_set_project_path(engine, "D:\\Proyectos\\Kowai\\KowaiTest\\");
 
-    // 2. Registrar los assets que el editor usara
-    SDL_GPUDevice* device = kowai_renderer_get_device(kowai_get_renderer(engine));
-    KowaiAssetBank* bank = kowai_engine_get_asset_bank(engine);
-
-    kowai_asset_bank_register_gltf(device, bank, "cat_statue", "D:\\Proyectos\\Kowai\\KowaiTest\\models\\concrete_cat_statue_1k\\concrete_cat_statue_1k.gltf");
-
-    // 3. Opcional: Cargar una escena inicial
-    // KowaiScene* inicio = kowai_scene_create("EscenaInicial");
-    // kowai_engine_set_active_scene(engine, inicio);
-
     while (kowai_is_running(engine)) {
         kowai_update(engine);
     }

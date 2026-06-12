@@ -42,6 +42,7 @@ typedef struct KowaiEntity {
 void kowai_entity_init(KowaiEntity* entity, uint32_t id, const char* name);
 void kowai_entity_add_component(KowaiEntity* entity, KowaiComponentType type, void* component_data);
 void* kowai_entity_get_component(const KowaiEntity* entity, KowaiComponentType type);
+void kowai_entity_remove_component(KowaiEntity* entity, KowaiComponentType type);
 
 // Funciones específicas para actualizar la matemática del Transform
 void kowai_transform_update_matrix(TransformComponent* transform);

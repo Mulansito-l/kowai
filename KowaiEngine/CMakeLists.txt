@@ -7,8 +7,9 @@ set(ENGINE_SOURCES
     "src/imgui_backend.cpp" 
     "src/time.c" 
     "src/camera.c" 
-    "src/asset_bank.c" 
+    "src/asset_bank.c"
     "src/scene.c"
+    
 )
 
 # 🟢 1. AGREGAR FUENTES DE NFD AL MOTOR SEGÚN SISTEMA OPERATIVO

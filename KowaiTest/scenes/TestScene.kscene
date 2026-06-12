@@ -1,0 +1,11 @@
+[Scene]
+name=TestScene
+sun_direction=0.500000,1.000000,0.300000
+
+[Entity_0]
+name=Nueva Entidad
+position=-0.500000,0.000000,0.000000
+rotation=25.000000,90.000000,-31.000000
+scale=1.000000,1.000000,1.000000
+has_mesh=1
+model_name=propane_tank_1k

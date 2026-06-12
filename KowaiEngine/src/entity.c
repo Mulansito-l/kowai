@@ -50,3 +50,31 @@ void kowai_transform_update_matrix(TransformComponent* transform) {
 
     glm_scale(transform->matrix, transform->scale);
 }
+
+void kowai_entity_remove_component(KowaiEntity* entity, KowaiComponentType type) {
+    if (!entity || entity->component_count == 0) return;
+
+    int target_idx = -1;
+
+    // 1. Buscar en qué índice del array está el componente
+    for (uint32_t i = 0; i < entity->component_count; i++) {
+        if (entity->component_types[i] == type) {
+            target_idx = (int)i;
+            break;
+        }
+    }
+
+    // Si no lo encontramos, salimos
+    if (target_idx == -1) return;
+
+    // 2. Desplazar los componentes siguientes hacia atrás para mantener el array contiguo
+    for (uint32_t i = target_idx; i < entity->component_count - 1; i++) {
+        entity->components[i] = entity->components[i + 1];
+        entity->component_types[i] = entity->component_types[i + 1];
+    }
+
+    // 3. Limpiar el último slot que quedó duplicado al final y restar el contador
+    uint32_t ultimo_idx = entity->component_count - 1;
+    entity->components[ultimo_idx] = NULL;
+    entity->component_count--;
+}
