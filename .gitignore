@@ -1,3 +1,5 @@
 .vs/
 out/
-
+KowaiTest/assets/
+KowaiTest/scenes/
+KowaiTest/shaders/
