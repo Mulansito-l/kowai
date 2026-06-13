@@ -63,7 +63,7 @@ void kowai_entity_remove_component(KowaiEntity* entity, KowaiComponentType type)
 void kowai_entity_set_parent(KowaiEntity* child, KowaiEntity* new_parent);
 
 // Funciones específicas para actualizar la matemática del Transform
-void kowai_transform_update_matrix(TransformComponent* transform);
+void kowai_transform_update_matrix(KowaiEntity* entity);
 
 
 #endif // KOWAI_ENTITY_H

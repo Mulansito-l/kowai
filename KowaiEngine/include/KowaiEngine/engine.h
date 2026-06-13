@@ -8,6 +8,7 @@ typedef struct KowaiEngine KowaiEngine;
 typedef struct KowaiScene KowaiScene;
 typedef struct KowaiAssetBank KowaiAssetBank;
 typedef struct KowaiCamera KowaiCamera;
+typedef struct KowaiInputSystem KowaiInputSystem;
 
 // Funciones de ciclo de vida del motor
 KowaiEngine* kowai_init(const char* title, int width, int height);
@@ -21,5 +22,9 @@ KowaiAssetBank* kowai_engine_get_asset_bank(KowaiEngine* engine);
 KowaiScene* kowai_engine_get_active_scene(KowaiEngine* engine);
 void kowai_engine_set_active_scene(KowaiEngine* engine, KowaiScene* scene);
 KowaiCamera* kowai_engine_get_active_camera(KowaiEngine* engine);
+KowaiInputSystem kowai_engine_get_input_system(KowaiEngine* engine);
+KowaiInputSystem* kowai_engine_get_input_system_ptr(KowaiEngine* engine);
+
+void kowai_engine_create_editor_input_context(KowaiEngine* engine);
 
 #endif // KOWAI_ENGINE_H

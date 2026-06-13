@@ -273,11 +273,27 @@ KowaiScene* kowai_scene_load(const char* filepath, KowaiAssetBank* asset_bank, S
         if (strncmp(line, "position=", 9) == 0) sscanf(line + 9, "%f,%f,%f", &scene->transforms[current_entity_idx].position[0], &scene->transforms[current_entity_idx].position[1], &scene->transforms[current_entity_idx].position[2]);
         if (strncmp(line, "rotation=", 9) == 0) sscanf(line + 9, "%f,%f,%f", &scene->transforms[current_entity_idx].rotation[0], &scene->transforms[current_entity_idx].rotation[1], &scene->transforms[current_entity_idx].rotation[2]);
         if (strncmp(line, "scale=", 6) == 0) {
-            TransformComponent* t = &scene->transforms[current_entity_idx];
-            sscanf(line + 6, "%f,%f,%f", &t->scale[0], &t->scale[1], &t->scale[2]);
-            kowai_transform_update_matrix(t);
-            // Registramos formalmente el transform en el array components del struct
-            kowai_entity_add_component(current_entity, COMPONENT_TRANSFORM, t);
+
+            TransformComponent* t =
+                &scene->transforms[current_entity_idx];
+
+            sscanf(
+                line + 6,
+                "%f,%f,%f",
+                &t->scale[0],
+                &t->scale[1],
+                &t->scale[2]
+            );
+
+            kowai_entity_add_component(
+                current_entity,
+                COMPONENT_TRANSFORM,
+                t
+            );
+
+            kowai_transform_update_matrix(
+                current_entity
+            );
         }
 
         // Parsear Componente de Luz usando campos corregidos
@@ -404,26 +420,80 @@ KowaiEntity* kowai_scene_create_entity(KowaiScene* scene, const char* name) {
     return NULL;
 }
 
-// =====================================================
-// DESTROY ENTITY
-// =====================================================
+// =====================================================================
+// FUNCIÓN AUXILIAR RECURSIVA: Destruye una entidad y todos sus hijos
+// =====================================================================
+static void kowai_entity_destroy_recursive(KowaiScene* scene, KowaiEntity* entity) {
+    if (!entity || entity->name[0] == '\0') return;
+
+    // 1. Primero, destruir a todos sus hijos en cascada de forma recursiva
+    KowaiEntity* hijo_actual = entity->first_child;
+    while (hijo_actual != NULL) {
+        // Guardamos el puntero al siguiente hermano ANTES de destruir al actual
+        KowaiEntity* siguiente_hermano = hijo_actual->next_sibling;
+
+        kowai_entity_destroy_recursive(scene, hijo_actual);
+
+        hijo_actual = siguiente_hermano;
+    }
+
+    // 2. Calcular el índice (ID) real de esta entidad en el arreglo plano de la escena
+    uint32_t id = (uint32_t)(entity - scene->entities);
+
+    // 3. Limpiar los componentes y la metadata de la entidad
+    entity->name[0] = '\0';
+    entity->component_count = 0;
+    memset(entity->components, 0, sizeof(entity->components));
+    memset(entity->component_types, 0, sizeof(entity->component_types));
+
+    // 4. Limpiar los componentes de los arreglos paralelos de la escena
+    scene->meshes[id].model = NULL;
+    scene->meshes[id].is_visible = false;
+
+    // Si tienes un arreglo paralelo para las luces, lo limpias aquí también:
+    // memset(&scene->lights[id], 0, sizeof(LightComponent));
+
+    // 5. Resetear sus propios punteros de jerarquía por seguridad
+    entity->parent = NULL;
+    entity->first_child = NULL;
+    entity->next_sibling = NULL;
+
+    // 6. Decrementar el contador global de la escena
+    scene->entity_count--;
+}
+
+// =====================================================================
+// DESTROY ENTITY (Punto de entrada principal)
+// =====================================================================
 bool kowai_scene_destroy_entity(KowaiScene* scene, uint32_t id) {
     if (!scene || id >= MAX_ENTITIES_PER_SCENE) return false;
 
     KowaiEntity* e = &scene->entities[id];
-
     if (e->name[0] == '\0') return false;
 
-    e->name[0] = '\0';
-    e->component_count = 0;
+    // 🟢 PASO CLAVE: Desenlazar la entidad de su Padre y sus Hermanos antes de borrarla
+    if (e->parent != NULL) {
+        KowaiEntity* padre = e->parent;
 
-    memset(e->components, 0,
-        sizeof(e->components));
+        if (padre->first_child == e) {
+            // Caso A: Es el primer hijo, el padre ahora apunta al hermano de esta entidad
+            padre->first_child = e->next_sibling;
+        }
+        else {
+            // Caso B: No es el primero, hay que buscar cuál de sus hermanos apuntaba a él
+            KowaiEntity* hermano = padre->first_child;
+            while (hermano != NULL && hermano->next_sibling != e) {
+                hermano = hermano->next_sibling;
+            }
+            if (hermano != NULL) {
+                // El hermano anterior ahora salta a esta entidad y apunta al siguiente
+                hermano->next_sibling = e->next_sibling;
+            }
+        }
+    }
 
-    scene->meshes[id].model = NULL;
-    scene->meshes[id].is_visible = false;
-
-    scene->entity_count--;
+    // Iniciar la destrucción en cadena (de forma recursiva destruirá componentes e hijos)
+    kowai_entity_destroy_recursive(scene, e);
 
     return true;
 }

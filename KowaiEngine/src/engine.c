@@ -9,6 +9,7 @@
 #include "KowaiEngine/asset_bank.h"
 #include "KowaiEngine/time.h"
 #include "KowaiEngine/imgui_backend.h"
+#include "KowaiEngine/input.h"
 
 struct KowaiEngine {
     SDL_Window* window;
@@ -21,6 +22,8 @@ struct KowaiEngine {
     KowaiCamera* active_camera;
 
     KowaiTimer* timer;
+
+    KowaiInputSystem input_system;
 
     // Sistemas macros genéricos del motor
     KowaiAssetBank asset_bank;
@@ -57,6 +60,9 @@ KowaiEngine* kowai_init(const char* title, int width, int height) {
     engine->timer = kowai_timer_create(60.0);
     kowai_asset_bank_init(&engine->asset_bank);
 
+    kowai_input_init(&engine->input_system);
+    kowai_engine_create_editor_input_context(engine);
+
     engine->active_scene = NULL; // Se inyectará después desde KowaiTest
     engine->is_running = true;
     engine->show_devtools = false;
@@ -77,14 +83,23 @@ KowaiEngine* kowai_init(const char* title, int width, int height) {
 void kowai_update(KowaiEngine* engine) {
     if (!engine) return;
 
-    // 1. Capturar estados del mouse para el vuelo de la cámara
+    // 🟢 1. ACTUALIZAR EL SISTEMA DE INPUT GLOBAL
+    // Guardamos los estados del frame anterior antes de procesar los nuevos
+    kowai_input_update(&engine->input_system);
+
+    // Recuperamos los deltas del mouse de forma nativa a través de SDL3
     float mouse_dx = 0.0f, mouse_dy = 0.0f;
-    Uint32 mouse_buttons = SDL_GetRelativeMouseState(&mouse_dx, &mouse_dy);
+    SDL_GetRelativeMouseState(&mouse_dx, &mouse_dy);
 
     // 2. Procesar Eventos del Sistema
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
-        imgui_backend_process_event(&event);
+
+        // 🟢 Si ImGui captura el evento, hacemos continue inmediatamente.
+        // Esto evita que se disparen atajos o lógicas del motor por detrás de la UI.
+        if (imgui_backend_process_event(&event)) {
+            continue;
+        }
 
         if (event.type == SDL_EVENT_QUIT) {
             engine->is_running = false;
@@ -93,8 +108,20 @@ void kowai_update(KowaiEngine* engine) {
             if (event.key.key == SDLK_F2) {
                 engine->show_devtools = !engine->show_devtools;
                 engine->active_camera = engine->show_devtools ? &engine->editor_camera : &engine->game_camera;
+
+                kowai_input_set_context_active(&engine->input_system, "KowaiEditor", engine->show_devtools);
+                kowai_input_set_context_active(&engine->input_system, "Gameplay", !engine->show_devtools);
+
                 SDL_Log("KowaiEngine: Cambiando a Camara de %s", engine->show_devtools ? "Editor" : "Juego");
             }
+        }
+    }
+
+    // Atajos rápidos globales del editor usando tu nuevo Input System
+    if (engine->show_devtools && kowai_input_get_action_down(&engine->input_system, "SaveScene")) {
+        if (engine->active_scene && engine->active_scene->current_filepath[0] != '\0') {
+            kowai_scene_save(engine->active_scene, &engine->asset_bank, engine->active_scene->current_filepath);
+            SDL_Log("KowaiEngine: Escena guardada mediante atajo rápido (Ctrl+S).");
         }
     }
 
@@ -104,130 +131,106 @@ void kowai_update(KowaiEngine* engine) {
     // 4. BUCLE FIJO (Simulación y actualización espacial a 60Hz)
     while (engine->timer->accumulator >= engine->timer->fixed_delta_time) {
 
-        // A) Procesar Input de la cámara de desarrollo
+        // 🟢 A) PROCESAR INPUT DE LA CÁMARA USANDO TU INPUT MAP
         if (engine->active_camera->mode == CAMERA_MODE_EDITOR) {
-            const Uint8* keyboard_state = SDL_GetKeyboardState(NULL);
 
-            if ((mouse_buttons & SDL_BUTTON_RMASK)) {
+            // Consultamos la acción abstracta del mouse que definiste en tu setup ("LookAround" o similar)
+            // que internamente mapea a INPUT_TYPE_MOUSE_BUTTON -> SDL_BUTTON_RIGHT
+            if (kowai_input_get_action(&engine->input_system, "CameraFlightMode")) {
                 SDL_HideCursor();
-                kowai_camera_process_input(engine->active_camera, keyboard_state, mouse_dx, mouse_dy, (float)engine->timer->fixed_delta_time);
+
+                // Pasamos directamente el puntero del InputSystem a la cámara para que consulte
+                // de forma interna "MoveForward", "MoveBackward", "MoveLeft", "MoveRight"
+                kowai_camera_process_input_mapped(
+                    engine->active_camera,
+                    &engine->input_system,
+                    mouse_dx,
+                    mouse_dy,
+                    (float)engine->timer->fixed_delta_time
+                );
             }
             else {
                 SDL_ShowCursor();
             }
         }
 
-        // B) Actualizar las matrices TRS de las entidades que tengan un Transform
+        // B) Actualizar las matrices TRS de las entidades (Tu código actual idéntico...)
         if (engine->active_scene) {
             for (int i = 0; i < MAX_ENTITIES_PER_SCENE; i++) {
-                KowaiEntity* entity = &engine->active_scene->entities[i];
 
-                // Si el nombre está vacío, es un slot inactivo, lo saltamos
+                KowaiEntity* entity = &engine->active_scene->entities[i];
                 if (!entity->name || entity->name[0] == '\0') continue;
 
-                // Usamos tu función nativa para buscar el componente
                 TransformComponent* transform = (TransformComponent*)kowai_entity_get_component(entity, COMPONENT_TRANSFORM);
                 if (transform) {
                     kowai_transform_update_matrix(transform);
                 }
+
+
             }
         }
 
         engine->timer->accumulator -= engine->timer->fixed_delta_time;
     }
 
-    // 5. Matrices de proyección de la cámara activa
+    // 5. Matrices de proyección de la cámara activa (Tu código actual...)
     int w, h;
     SDL_GetWindowSizeInPixels(engine->window, &w, &h);
     kowai_camera_update_matrices(engine->active_camera, w, h);
 
     if (engine->active_scene != NULL) {
         KowaiScene* scene = engine->active_scene;
-
         for (int i = 0; i < MAX_ENTITIES_PER_SCENE; i++) {
-            // Recorremos SOLO las entidades que están vivas Y que son RAÍZ (no tienen padre)
             if (scene->entities[i].name[0] != '\0' && scene->entities[i].parent == NULL) {
-
-                // Al actualizar la raíz, su función recursiva interna se encargará de
-                // bajar en cascada por todos los 'first_child' y 'next_sibling'
-                // calculando las matrices globales perfectas de los hijos.
-                kowai_transform_update_matrix(&scene->entities[i]);
+                // Pequeña corrección de tipos sobre tu código base original para evitar warnings:
+                // kowai_transform_update_matrix requiere un TransformComponent*, no una Entity*
+                TransformComponent* root_t = (TransformComponent*)kowai_entity_get_component(&scene->entities[i], COMPONENT_TRANSFORM);
+                if (root_t) kowai_transform_update_matrix(root_t);
             }
         }
     }
 
-    // 6. PIPELINE DE RENDERIZADO
+    // 6. PIPELINE DE RENDERIZADO (Tu código actual se queda exactamente igual...)
     if (kowai_renderer_begin_frame(engine->renderer, engine->window))
     {
-        // 🟢 INYECCIÓN DE ENTORNO: Pasamos los datos de la escena al renderer antes de los pases.
-        // Si no hay escena activa, pasamos NULL para que el renderer use sus propios fallbacks por defecto.
         if (engine->active_scene) {
             KowaiScene* scene = engine->active_scene;
-            kowai_renderer_set_environment(
-                engine->renderer,
-                scene->sky_clear_color,
-                scene->sun_direction,
-                scene->sun_color,
-                scene->ambient_color
-            );
+            kowai_renderer_set_environment(engine->renderer, scene->sky_clear_color, scene->sun_direction, scene->sun_color, scene->ambient_color);
         }
         else {
             kowai_renderer_set_environment(engine->renderer, NULL, NULL, NULL, NULL);
         }
 
-        // PASS 1: Dibujar mundo 3D (Solo si hay una escena activa cargada)
-        // Ahora kowai_renderer_begin_render_pass_3d usará internamente el color guardado en el paso anterior.
         kowai_renderer_begin_render_pass_3d(engine->renderer);
-
         if (engine->active_scene) {
             KowaiScene* scene = engine->active_scene;
-
             for (int i = 0; i < MAX_ENTITIES_PER_SCENE; i++) {
                 KowaiEntity* entity = &scene->entities[i];
-
-                // Si el slot está vacío, lo saltamos
                 if (!entity->name || entity->name[0] == '\0') continue;
-
                 uint32_t id = entity->id;
-
-                // Extraemos las referencias directas desde los pools de la escena
                 TransformComponent* transform = &scene->transforms[id];
                 MeshRenderComponent* mesh_render = &scene->meshes[id];
 
-                // Validamos si la malla tiene un modelo cargado y está marcada como visible
                 if (mesh_render->model && mesh_render->is_visible) {
                     kowai_renderer_draw_model(engine->renderer, mesh_render->model, transform->global_matrix, engine->active_camera, engine->active_scene);
                 }
             }
         }
-
         kowai_renderer_end_render_pass(engine->renderer);
 
-        // PASS 2: Dibujar herramientas de desarrollo (UI)
         if (engine->show_devtools) {
-            // Pasamos los datos dinámicos de la escena activa a ImGui (si no hay, pasamos NULL)
-            imgui_backend_build_devtools(
-                engine,
-                (float)engine->timer->delta_time);
+            imgui_backend_build_devtools(engine, (float)engine->timer->delta_time);
             imgui_backend_prepare(kowai_renderer_get_current_cmd_buffer(engine->renderer));
-
             kowai_renderer_begin_render_pass_ui(engine->renderer);
-
-            imgui_backend_render(
-                kowai_renderer_get_current_cmd_buffer(engine->renderer),
-                kowai_renderer_get_current_render_pass(engine->renderer)
-            );
-
+            imgui_backend_render(kowai_renderer_get_current_cmd_buffer(engine->renderer), kowai_renderer_get_current_render_pass(engine->renderer));
             kowai_renderer_end_render_pass(engine->renderer);
         }
         else {
             imgui_backend_skip_frame();
         }
-
         kowai_renderer_end_frame(engine->renderer);
     }
 
-    // 7. Liberar CPU
     SDL_DelayNS(1000000);
 }
 
@@ -275,6 +278,50 @@ KowaiCamera* kowai_engine_get_active_camera(KowaiEngine* engine)
     return engine ? engine->active_camera : NULL;
 }
 
+KowaiInputSystem kowai_engine_get_input_system(KowaiEngine* engine)
+{
+    return engine->input_system;
+}
+
+void kowai_engine_create_editor_input_context(KowaiEngine* engine)
+{
+    // =========================================================================
+    // 🟢 CONFIGURACIÓN INICIAL DEL MAPA DE ACCIONES (INPUT MAP)
+    // =========================================================================
+
+    // 1. Inicializar la estructura limpia en memoria
+    kowai_input_init(&engine->input_system);
+
+    // 2. Crear el contexto exclusivo para las herramientas del Editor
+    kowai_input_create_context(&engine->input_system, "KowaiEditor");
+    kowai_input_set_context_read_only(
+        &engine->input_system,
+        "KowaiEditor",
+        true
+    );
+
+    // 3. Mapear el Clic Derecho del mouse a la acción que activa el vuelo de la cámara
+    kowai_input_add_mapping(&engine->input_system, "KowaiEditor", "CameraFlightMode",
+        INPUT_TYPE_MOUSE_BUTTON, SDL_BUTTON_RIGHT, 0);
+
+    // 4. Mapear los controles de traslación de la cámara para el vuelo 3D
+    kowai_input_add_mapping(&engine->input_system, "KowaiEditor", "MoveForward",
+        INPUT_TYPE_KEYBOARD, SDL_SCANCODE_W, 0);
+    kowai_input_add_mapping(&engine->input_system, "KowaiEditor", "MoveBackward",
+        INPUT_TYPE_KEYBOARD, SDL_SCANCODE_S, 0);
+    kowai_input_add_mapping(&engine->input_system, "KowaiEditor", "MoveLeft",
+        INPUT_TYPE_KEYBOARD, SDL_SCANCODE_A, 0);
+    kowai_input_add_mapping(&engine->input_system, "KowaiEditor", "MoveRight",
+        INPUT_TYPE_KEYBOARD, SDL_SCANCODE_D, 0);
+
+    // 5. Mapear las Hotkeys globales del Editor que procesa el motor
+    kowai_input_add_mapping(&engine->input_system, "KowaiEditor", "SaveScene",
+        INPUT_TYPE_KEYBOARD, SDL_SCANCODE_S, SDL_KMOD_CTRL);
+
+    // 6. ¡CRÍTICO! Activar el contexto por defecto para que kowai_input_get_action lo evalúe
+    kowai_input_set_context_active(&engine->input_system, "KowaiEditor", true);
+}
+
 void kowai_engine_set_project_path(KowaiEngine* engine, const char* path) {
     if (engine && path) {
         SDL_strlcpy(engine->project_path, path, sizeof(engine->project_path));
@@ -284,6 +331,11 @@ void kowai_engine_set_project_path(KowaiEngine* engine, const char* path) {
 
 const char* kowai_engine_get_project_path(KowaiEngine* engine) {
     return engine ? engine->project_path : NULL;
+}
+
+KowaiInputSystem* kowai_engine_get_input_system_ptr(KowaiEngine* engine)
+{
+    return engine ? &engine->input_system : NULL;
 }
 
 bool kowai_is_running(KowaiEngine* engine) {

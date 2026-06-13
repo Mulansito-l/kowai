@@ -14,12 +14,15 @@ extern "C" {
     #include "KowaiEngine/entity.h"
     #include "KowaiEngine/renderer.h"
     #include "KowaiEngine/camera.h"
+    #include "KowaiEngine/input.h"
 
     struct KowaiRenderer* kowai_get_renderer(KowaiEngine* engine);
     static void imgui_backend_render_file_tree(KowaiAssetBank* asset_bank, const char* current_dir_path);
     void kowai_entity_remove_component(KowaiEntity* entity, KowaiComponentType type);
     void imgui_backend_draw_asset_browser(KowaiEngine* engine, KowaiAssetBank* asset_bank);
     void imgui_backend_draw_hierarchy_node(KowaiScene* scene, KowaiEntity* entity, int* seleccionado_idx);
+
+    static KowaiInputActionMap* g_waiting_binding = nullptr;
 
     void imgui_backend_init(SDL_Window* window, SDL_GPUDevice* device, SDL_GPUTextureFormat format) {
         IMGUI_CHECKVERSION();
@@ -142,6 +145,11 @@ extern "C" {
 
         // Estado local para abrir la ventana de ajustes globales
         static bool mostrar_ajustes_escena = false;
+        static bool mostrar_input_settings = false;
+        static bool abrir_popup_nuevo_contexto = false;
+        static char nuevo_contexto_nombre[32] = "";
+        static bool abrir_popup_nuevo_mapping = false;
+        static char nuevo_mapping_nombre[32] = "";
 
         // =========================================================================
         // 🟢 TOP BAR CONFIGURADA ESTILO UNITY
@@ -269,10 +277,20 @@ extern "C" {
             }
 
             // --- 🟢 NUEVO MENÚ: CONFIGURACIÓN (ENTORNO GLOBAL) ---
-            if (ImGui::BeginMenu("Configuración", scene != NULL)) {
-                if (ImGui::MenuItem("Ajustes de Entorno / Luz...", NULL, mostrar_ajustes_escena)) {
+            if (ImGui::BeginMenu("Scene settings", scene != NULL)) {
+                if (ImGui::MenuItem("Ambient/Lighting settings", NULL, mostrar_ajustes_escena)) {
                     mostrar_ajustes_escena = !mostrar_ajustes_escena;
                 }
+                ImGui::EndMenu();
+            }
+
+            // --- 🟢 NUEVO MENÚ: CONFIGURACIÓN (ENTORNO GLOBAL) ---
+            if (ImGui::BeginMenu("Input settings")) {
+                if (ImGui::MenuItem("Input mappings", NULL, mostrar_input_settings))
+                {
+                    mostrar_input_settings = !mostrar_input_settings;
+                }
+
                 ImGui::EndMenu();
             }
 
@@ -320,6 +338,276 @@ extern "C" {
 
             ImGui::End();
         }
+
+        if (mostrar_input_settings) {
+            KowaiInputSystem* input =
+                kowai_engine_get_input_system_ptr(engine);
+
+            if (!input)
+                return;
+
+            static int selected_context = 0;
+            ImGui::Begin(
+                "Input Settings",
+                &mostrar_input_settings
+            );
+
+            ImGui::BeginChild("ContextList", ImVec2(220, 0), true);
+
+            static int renaming_context = -1;
+            static char rename_buffer[32] = "";
+
+            for (int i = 0; i < input->context_count; i++)
+            {
+                bool selected = (selected_context == i);
+
+                if (renaming_context == i)
+                {
+                    ImGui::SetKeyboardFocusHere();
+                    ImGui::SetNextItemWidth(-FLT_MIN);
+
+                    if (ImGui::InputText(
+                        "##rename",
+                        rename_buffer,
+                        sizeof(rename_buffer),
+                        ImGuiInputTextFlags_EnterReturnsTrue |
+                        ImGuiInputTextFlags_AutoSelectAll))
+                    {
+                        if (rename_buffer[0] != '\0')
+                            SDL_strlcpy(
+                                input->contexts[i].context_name,
+                                rename_buffer,
+                                sizeof(input->contexts[i].context_name));
+                        renaming_context = -1;
+                    }
+
+                    // Cancelar con Escape o click afuera
+                    if (ImGui::IsKeyPressed(ImGuiKey_Escape) ||
+                        (!ImGui::IsItemActive() &&
+                            ImGui::IsMouseClicked(0)))
+                    {
+                        renaming_context = -1;
+                    }
+                }
+                else
+                {
+                    if (ImGui::Selectable(
+                        input->contexts[i].context_name,
+                        selected))
+                    {
+                        selected_context = i;
+                    }
+
+                    if (ImGui::IsItemHovered() &&
+                        ImGui::IsMouseDoubleClicked(0) &&
+                        !input->contexts[i].is_read_only)
+                    {
+                        renaming_context = i;
+                        SDL_strlcpy(
+                            rename_buffer,
+                            input->contexts[i].context_name,
+                            sizeof(rename_buffer));
+                    }
+                }
+            }
+
+            ImGui::Separator();
+
+            if (ImGui::Button("+ Crear Contexto", ImVec2(-1, 0)))
+            {
+                char nombre[32];
+                SDL_snprintf(
+                    nombre,
+                    sizeof(nombre),
+                    "Contexto %d",
+                    input->context_count + 1);
+
+                int idx = kowai_input_create_context(input, nombre);
+
+                if (idx >= 0)
+                {
+                    selected_context = idx;
+                    // Entrar directo a modo renombre
+                    renaming_context = idx;
+                    SDL_strlcpy(rename_buffer, nombre, sizeof(rename_buffer));
+                }
+            }
+
+            ImGui::EndChild();
+
+            ImGui::SameLine();
+
+            ImGui::BeginChild(
+                "ContextEditor",
+                ImVec2(0, 0),
+                true
+            );
+
+            if (selected_context < input->context_count)
+            {
+                KowaiInputContext* ctx =
+                    &input->contexts[selected_context];
+                ImGui::Text(
+                    "Contexto: %s",
+                    ctx->context_name
+                );
+
+                if (ctx->is_read_only)
+                {
+                    ImGui::TextColored(
+                        ImVec4(1, 1, 0, 1),
+                        "Contexto protegido del motor"
+                    );
+                }
+
+                ImGui::Separator();
+                ImGui::Text("Mappings");
+                if (ctx->is_read_only)
+                {
+                    ImGui::BeginDisabled();
+                }
+
+                if (ImGui::BeginTable(
+                    "MappingsTable",
+                    4,
+                    ImGuiTableFlags_Borders |
+                    ImGuiTableFlags_RowBg |
+                    ImGuiTableFlags_Resizable))
+                {
+                    ImGui::TableSetupColumn("Action");
+                    ImGui::TableSetupColumn("Type");
+                    ImGui::TableSetupColumn("Binding");
+                    ImGui::TableSetupColumn("Modifier");
+
+                    ImGui::TableHeadersRow();
+
+                    for (int i = 0; i < ctx->mapping_count; i++)
+                    {
+                        KowaiInputActionMap* map =
+                            &ctx->mappings[i];
+
+                        ImGui::TableNextRow();
+
+                        // ACTION
+                        ImGui::TableSetColumnIndex(0);
+
+                        ImGui::PushID(i);
+
+                        ImGui::SetNextItemWidth(-FLT_MIN);
+
+                        char id[64];
+                        SDL_snprintf(
+                            id,
+                            sizeof(id),
+                            "##action_%d",
+                            i
+                        );
+
+                        ImGui::InputText(
+                            id,
+                            map->action_name,
+                            sizeof(map->action_name)
+                        );
+
+                        ImGui::PopID();
+
+                        // TYPE
+                        ImGui::TableSetColumnIndex(1);
+
+                        ImGui::PushID(i);
+
+                        const char* tipos[] =
+                        {
+                            "Keyboard",
+                            "MouseButton",
+                            "MouseWheel"
+                        };
+
+                        int current_type = (int)map->type;
+
+                        ImGui::SetNextItemWidth(-FLT_MIN);
+
+                        if (ImGui::Combo(
+                            "##Type",
+                            &current_type,
+                            tipos,
+                            IM_ARRAYSIZE(tipos)))
+                        {
+                            map->type = (KowaiInputType)current_type;
+                        }
+
+                        ImGui::PopID();
+
+                        // BINDING
+                        ImGui::TableSetColumnIndex(2);
+
+                        ImGui::PushID(i);
+
+                        const char* label =
+                            (g_waiting_binding == map)
+                            ? "Press key..."
+                            : kowai_input_code_to_string(
+                                map->type,
+                                map->code);
+
+                        if (ImGui::Button(
+                            label,
+                            ImVec2(-FLT_MIN, 0)))
+                        {
+                            g_waiting_binding = map;
+                        }
+
+                        ImGui::PopID();
+
+                        // MODIFIER
+                        ImGui::TableSetColumnIndex(3);
+
+                        if (map->modifier != 0)
+                        {
+                            ImGui::Text(
+                                "%s",
+                                kowai_input_modifier_to_string(
+                                    map->modifier));
+                        }
+                        else
+                        {
+                            ImGui::TextDisabled("-");
+                        }
+                    }
+
+                    ImGui::EndTable();
+                }
+
+                ImGui::Separator();
+
+                static char nuevo_mapping_nombre[32] = "";
+
+                if (ImGui::Button("+ Nuevo Mapping"))
+                {
+                    strcpy(
+                        nuevo_mapping_nombre,
+                        "NuevaAccion"
+                    );
+
+                    kowai_input_add_mapping(
+                        input,
+                        ctx->context_name,
+                        nuevo_mapping_nombre,
+                        INPUT_TYPE_KEYBOARD,
+                        SDL_SCANCODE_UNKNOWN,
+                        0
+                    );
+                }
+
+                if (ctx->is_read_only)
+                {
+                    ImGui::EndDisabled();
+                }
+            }
+            ImGui::EndChild();
+            ImGui::End();
+        }
+
 
         // --- VENTANA 1: ESTADÍSTICAS ---
         ImGui::Begin("Estadísticas del Motor");
@@ -407,9 +695,9 @@ extern "C" {
                     }
 
                     if (open) {
-                        if (ImGui::DragFloat3("Pos", t->position, 0.1f)) kowai_transform_update_matrix(t);
-                        if (ImGui::DragFloat3("Rot", t->rotation, 1.0f)) kowai_transform_update_matrix(t);
-                        if (ImGui::DragFloat3("Scale", t->scale, 0.1f))  kowai_transform_update_matrix(t);
+                        if (ImGui::DragFloat3("Pos", t->position, 0.1f)) kowai_transform_update_matrix(e);
+                        if (ImGui::DragFloat3("Rot", t->rotation, 1.0f)) kowai_transform_update_matrix(e);
+                        if (ImGui::DragFloat3("Scale", t->scale, 0.1f))  kowai_transform_update_matrix(e);
                     }
                     ImGui::Spacing();
                 }
@@ -577,7 +865,7 @@ extern "C" {
                             scene->transforms[id].position[0] = 0.0f; scene->transforms[id].position[1] = 0.0f; scene->transforms[id].position[2] = 0.0f;
                             scene->transforms[id].rotation[0] = 0.0f; scene->transforms[id].rotation[1] = 0.0f; scene->transforms[id].rotation[2] = 0.0f;
                             scene->transforms[id].scale[0] = 1.0f;    scene->transforms[id].scale[1] = 1.0f;    scene->transforms[id].scale[2] = 1.0f;
-                            kowai_transform_update_matrix(&scene->transforms[id]);
+                            kowai_transform_update_matrix(&scene->entities[id]);
                             kowai_entity_add_component(e, COMPONENT_TRANSFORM, &scene->transforms[id]);
                         }
                     }
@@ -640,9 +928,22 @@ extern "C" {
 
                 // 3. Atajos de teclado estilo Unity para cambiar de herramienta (Opcional pero muy cómodo)
                 static ImGuizmo::OPERATION operacion_actual = ImGuizmo::TRANSLATE;
-                if (ImGui::IsKeyPressed(ImGuiKey_W)) operacion_actual = ImGuizmo::TRANSLATE; // W = Mover
-                if (ImGui::IsKeyPressed(ImGuiKey_E)) operacion_actual = ImGuizmo::ROTATE;    // E = Rotar
-                if (ImGui::IsKeyPressed(ImGuiKey_R)) operacion_actual = ImGuizmo::SCALE;     // R = Escalar
+
+                KowaiInputSystem* input = kowai_engine_get_input_system_ptr(engine);
+
+                if (kowai_input_get_action_down(input, "TranslateMode")) {
+                    operacion_actual = ImGuizmo::TRANSLATE;
+                }
+
+                if (kowai_input_get_action_down(input, "RotateMode")) {
+                    // Puedes exponer una pequeña función en imgui_backend para cambiar el estado del gizmo, ej:
+                    operacion_actual = ImGuizmo::ROTATE;
+                }
+
+                if (kowai_input_get_action_down(input, "ScaleMode")) {
+                    // Puedes exponer una pequeña función en imgui_backend para cambiar el estado del gizmo, ej:
+                    operacion_actual = ImGuizmo::SCALE;
+                }
 
                 // 4. Dibujar e interactuar con el Gizmo
                 // Usamos la coordenada LOCAL para que las flechas giren junto al objeto, o WORLD para ejes fijos
@@ -661,7 +962,7 @@ extern "C" {
                     }
 
                     // Forzamos la actualización interna de las matrices normales y el modelo
-                    kowai_transform_update_matrix(t);
+                    kowai_transform_update_matrix(e);
                 }
             }
         }
@@ -778,7 +1079,49 @@ extern "C" {
     }
 
     bool imgui_backend_process_event(SDL_Event* event) {
-        return ImGui_ImplSDL3_ProcessEvent(event);
+        bool handled = ImGui_ImplSDL3_ProcessEvent(event);
+
+        if (g_waiting_binding)
+        {
+            if (event->type == SDL_EVENT_KEY_DOWN)
+            {
+                SDL_Scancode scancode = event->key.scancode;
+
+                // ✅ Leer mods del evento, NO de SDL_GetModState()
+                SDL_Keymod mods = event->key.mod;
+
+                g_waiting_binding->modifier = 0;
+                if (mods & SDL_KMOD_CTRL)
+                    g_waiting_binding->modifier |= INPUT_MOD_CTRL;
+                if (mods & SDL_KMOD_SHIFT)
+                    g_waiting_binding->modifier |= INPUT_MOD_SHIFT;
+                if (mods & SDL_KMOD_ALT)
+                    g_waiting_binding->modifier |= INPUT_MOD_ALT;
+
+                if (scancode == SDL_SCANCODE_ESCAPE)
+                {
+                    g_waiting_binding = nullptr;
+                    return true;
+                }
+
+                if (scancode == SDL_SCANCODE_LCTRL ||
+                    scancode == SDL_SCANCODE_RCTRL ||
+                    scancode == SDL_SCANCODE_LSHIFT ||
+                    scancode == SDL_SCANCODE_RSHIFT ||
+                    scancode == SDL_SCANCODE_LALT ||
+                    scancode == SDL_SCANCODE_RALT)
+                {
+                    return true;
+                }
+
+                g_waiting_binding->type = INPUT_TYPE_KEYBOARD;
+                g_waiting_binding->code = scancode;
+                g_waiting_binding = nullptr;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     void imgui_backend_skip_frame(void) {

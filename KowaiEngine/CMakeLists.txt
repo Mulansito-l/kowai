@@ -10,7 +10,7 @@ set(ENGINE_SOURCES
     "src/asset_bank.c"
     "src/scene.c"
     
-)
+ "src/input.c")
 
 # 🟢 1. AGREGAR FUENTES DE NFD AL MOTOR SEGÚN SISTEMA OPERATIVO
 set(NFD_SOURCES
