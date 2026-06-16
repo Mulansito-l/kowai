@@ -106,7 +106,6 @@ void kowai_update(KowaiEngine* engine) {
                 engine->active_camera = engine->show_devtools ? &engine->editor_camera : &engine->game_camera;
 
                 kowai_input_set_context_active(&engine->input_system, "KowaiEditor", engine->show_devtools);
-                kowai_input_set_context_active(&engine->input_system, "Gameplay", !engine->show_devtools);
 
                 SDL_Log("KowaiEngine: Cambiando a Camara de %s", engine->show_devtools ? "Editor" : "Juego");
             }
@@ -167,13 +166,6 @@ void kowai_update(KowaiEngine* engine) {
         }
 
         engine->timer->accumulator -= engine->timer->fixed_delta_time;
-
-
-        SDL_Log("=== Input Gamepad ===");
-        SDL_Log("Left  Stick: (%.2f, %.2f)", engine->input_system.left_stick_x, engine->input_system.left_stick_y);
-        SDL_Log("Right Stick: (%.2f, %.2f)", engine->input_system.right_stick_x, engine->input_system.right_stick_y);
-        SDL_Log("Left  Trigger: %.2f", engine->input_system.left_trigger);
-        SDL_Log("Right Trigger: %.2f", engine->input_system.right_trigger);
     }
 
     // 5. Matrices de proyección de la cámara activa (Tu código actual...)
@@ -320,9 +312,6 @@ void kowai_engine_create_editor_input_context(KowaiEngine* engine)
     // 5. Mapear las Hotkeys globales del Editor que procesa el motor
     kowai_input_add_mapping(&engine->input_system, "KowaiEditor", "SaveScene",
         INPUT_TYPE_KEYBOARD, SDL_SCANCODE_S, SDL_KMOD_CTRL);
-
-    // 6. ¡CRÍTICO! Activar el contexto por defecto para que kowai_input_get_action lo evalúe
-    kowai_input_set_context_active(&engine->input_system, "KowaiEditor", true);
 }
 
 void kowai_engine_set_project_path(KowaiEngine* engine, const char* path) {
