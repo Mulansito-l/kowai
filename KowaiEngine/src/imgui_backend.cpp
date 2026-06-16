@@ -304,6 +304,47 @@ extern "C" {
                 ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "⚠️ Sin Escena Activa (Archivo -> Nueva Escena)");
             }
 
+            // === PLAY CONTROLS (derecha) ===
+            float button_width = 30.0f;
+            float total_width = button_width * 3 + ImGui::GetStyle().ItemSpacing.x * 2;
+            ImGui::SetCursorPosX(ImGui::GetContentRegionMax().x - total_width);
+
+            bool is_playing = kowai_engine_get_play_mode() == KOWAI_MODE_PLAYING;
+            bool is_paused = kowai_engine_get_play_mode() == KOWAI_MODE_PAUSED;
+            bool is_editor = kowai_engine_get_play_mode() == KOWAI_MODE_EDITOR;
+
+            // PLAY
+            if (is_playing) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.7f, 0.2f, 1.0f));
+            if (ImGui::Button(">", ImVec2(button_width, 0)))
+            {
+                SDL_Log("Boton PLAY presionado, engine: %p, play_mode: %d", engine, engine ? kowai_engine_get_play_mode() : -1);
+                if (is_editor)
+                    kowai_engine_play(engine);
+                else if (is_paused)
+                    kowai_engine_play(engine); // reanudar desde pausa
+            }
+            if (is_playing) ImGui::PopStyleColor();
+
+            ImGui::SameLine();
+
+            // PAUSE
+            if (is_paused) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.7f, 0.2f, 1.0f));
+            if (ImGui::Button("=", ImVec2(button_width, 0)))
+            {
+                if (is_playing)
+                    kowai_engine_pause(engine);
+            }
+            if (is_paused) ImGui::PopStyleColor();
+
+            ImGui::SameLine();
+
+            // STOP
+            if (ImGui::Button("*", ImVec2(button_width, 0)))
+            {
+                if (!is_editor)
+                    kowai_engine_stop(engine);
+            }
+
             ImGui::EndMainMenuBar();
         }
 

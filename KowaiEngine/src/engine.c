@@ -29,7 +29,20 @@ struct KowaiEngine {
     KowaiAssetBank asset_bank;
     KowaiScene* active_scene;
     char project_path[256]; // 🟢 Nueva variable
+
+    KowaiStartFn    on_start;
+    KowaiUpdateFn   on_update;
+    KowaiShutdownFn on_shutdown;
+
+    KowaiPlayMode play_mode;
 };
+
+static KowaiEngine* g_engine = NULL;
+
+KowaiEngine* kowai_get_current_engine(void)
+{
+    return g_engine;
+}
 
 KowaiEngine* kowai_init(const char* title, int width, int height, const char* project_path) {
     KowaiEngine* engine = malloc(sizeof(KowaiEngine));
@@ -81,6 +94,15 @@ KowaiEngine* kowai_init(const char* title, int width, int height, const char* pr
 
     kowai_input_load(&engine->input_system, project_path);
 
+    g_engine = engine; // ← al final del init, antes del return
+
+    engine->show_devtools = true;
+    engine->active_camera = &engine->editor_camera;
+
+    kowai_input_set_context_active(&engine->input_system, "KowaiEditor", engine->show_devtools);
+
+    engine->play_mode = KOWAI_MODE_EDITOR;
+
     return engine;
 }
 
@@ -103,16 +125,6 @@ void kowai_update(KowaiEngine* engine) {
 
         if (event.type == SDL_EVENT_QUIT) {
             engine->is_running = false;
-        }
-        else if (event.type == SDL_EVENT_KEY_DOWN) {
-            if (event.key.key == SDLK_F2) {
-                engine->show_devtools = !engine->show_devtools;
-                engine->active_camera = engine->show_devtools ? &engine->editor_camera : &engine->game_camera;
-
-                kowai_input_set_context_active(&engine->input_system, "KowaiEditor", engine->show_devtools);
-
-                SDL_Log("KowaiEngine: Cambiando a Camara de %s", engine->show_devtools ? "Editor" : "Juego");
-            }
         }
     }
 
@@ -168,6 +180,9 @@ void kowai_update(KowaiEngine* engine) {
 
             }
         }
+
+        if (engine->play_mode == KOWAI_MODE_PLAYING && engine->on_update)
+            engine->on_update((float)engine->timer->fixed_delta_time);
 
         engine->timer->accumulator -= engine->timer->fixed_delta_time;
     }
@@ -248,6 +263,7 @@ void kowai_shutdown(KowaiEngine* engine) {
 
     kowai_timer_destroy(engine->timer);
     free(engine);
+    g_engine = NULL; // ← al final del shutdown
 }
 
 // 🟢 GETTERS Y SETTERS PÚBLICOS PARA LA API (Lo que usará KowaiTest)
@@ -334,6 +350,91 @@ KowaiInputSystem* kowai_engine_get_input_system_ptr(KowaiEngine* engine)
     return engine ? &engine->input_system : NULL;
 }
 
+KowaiPlayMode kowai_engine_get_play_mode()
+{
+    return g_engine->play_mode;
+}
+
 bool kowai_is_running(KowaiEngine* engine) {
     return engine ? engine->is_running : false;
+}
+
+void kowai_engine_set_game_callbacks(
+    KowaiEngine* engine,
+    KowaiStartFn on_start,
+    KowaiUpdateFn on_update,
+    KowaiShutdownFn on_shutdown)
+{
+    if (!engine) return;
+    engine->on_start = on_start;
+    engine->on_update = on_update;
+    engine->on_shutdown = on_shutdown;
+}
+
+void kowai_engine_play(KowaiEngine* engine)
+{
+    if (!engine || engine->play_mode == KOWAI_MODE_PLAYING) return;
+
+    SDL_Log("KowaiEngine: Entrando a Play Mode");
+
+    // Serializar escena en memoria antes de entrar a play mode
+    if (engine->active_scene)
+        kowai_scene_save(engine->active_scene, &engine->asset_bank, "_kowai_temp.kscene");
+
+    engine->play_mode = KOWAI_MODE_PLAYING;
+
+    engine->show_devtools = !engine->show_devtools;
+    engine->active_camera = engine->show_devtools ? &engine->editor_camera : &engine->game_camera;
+
+    kowai_input_set_context_active(&engine->input_system, "KowaiEditor", engine->show_devtools);
+
+    SDL_Log("KowaiEngine: Cambiando a Camara de %s", engine->show_devtools ? "Editor" : "Juego");
+
+    if (engine->on_start)
+        engine->on_start();
+}
+
+void kowai_engine_pause(KowaiEngine* engine)
+{
+    if (!engine || engine->play_mode != KOWAI_MODE_PLAYING) return;
+    engine->play_mode = KOWAI_MODE_PAUSED;
+}
+
+void kowai_engine_stop(KowaiEngine* engine)
+{
+    if (!engine || engine->play_mode == KOWAI_MODE_EDITOR) return;
+
+    if (engine->on_shutdown)
+        engine->on_shutdown();
+
+    engine->play_mode = KOWAI_MODE_EDITOR;
+
+    if (engine->active_scene)
+    {
+        char original_filepath[512];
+        SDL_strlcpy(
+            original_filepath,
+            engine->active_scene->current_filepath,
+            sizeof(original_filepath));
+
+        kowai_scene_destroy(engine->active_scene);
+
+        engine->active_scene = kowai_scene_load(
+            "_kowai_temp.kscene",
+            &engine->asset_bank,
+            kowai_renderer_get_device(kowai_get_renderer(engine)));
+
+        if (engine->active_scene)
+            SDL_strlcpy(
+                engine->active_scene->current_filepath,
+                original_filepath,
+                sizeof(engine->active_scene->current_filepath));
+    }
+
+    engine->show_devtools = !engine->show_devtools;
+    engine->active_camera = engine->show_devtools ? &engine->editor_camera : &engine->game_camera;
+
+    kowai_input_set_context_active(&engine->input_system, "KowaiEditor", engine->show_devtools);
+
+    SDL_Log("KowaiEngine: Cambiando a Camara de %s", engine->show_devtools ? "Editor" : "Juego");
 }

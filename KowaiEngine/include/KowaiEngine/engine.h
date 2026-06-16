@@ -10,6 +10,12 @@ typedef struct KowaiAssetBank KowaiAssetBank;
 typedef struct KowaiCamera KowaiCamera;
 typedef struct KowaiInputSystem KowaiInputSystem;
 
+typedef enum {
+    KOWAI_MODE_EDITOR,
+    KOWAI_MODE_PLAYING,
+    KOWAI_MODE_PAUSED
+} KowaiPlayMode;
+
 // Funciones de ciclo de vida del motor
 KowaiEngine* kowai_init(const char* title, int width, int height, const char* project_path);
 bool kowai_is_running(KowaiEngine* engine);
@@ -25,6 +31,24 @@ KowaiCamera* kowai_engine_get_active_camera(KowaiEngine* engine);
 KowaiInputSystem kowai_engine_get_input_system(KowaiEngine* engine);
 KowaiInputSystem* kowai_engine_get_input_system_ptr(KowaiEngine* engine);
 
+KowaiPlayMode kowai_engine_get_play_mode();
+
+void kowai_engine_play(KowaiEngine* engine);
+void kowai_engine_pause(KowaiEngine* engine);
+void kowai_engine_stop(KowaiEngine* engine);
+
 void kowai_engine_create_editor_input_context(KowaiEngine* engine);
+
+KowaiEngine* kowai_get_current_engine(void);
+
+typedef void (*KowaiStartFn)(void);
+typedef void (*KowaiUpdateFn)(float delta_time);
+typedef void (*KowaiShutdownFn)(void);
+
+void kowai_engine_set_game_callbacks(
+    KowaiEngine* engine,
+    KowaiStartFn on_start,
+    KowaiUpdateFn on_update,
+    KowaiShutdownFn on_shutdown);
 
 #endif // KOWAI_ENGINE_H

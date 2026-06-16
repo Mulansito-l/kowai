@@ -1,6 +1,6 @@
 # Archivos fuente de la aplicación de pruebas
 set(TEST_SOURCES
-    src/main.c
+    "src/main.cpp"
 )
 
 # Crear el ejecutable (KowaiTest.exe)

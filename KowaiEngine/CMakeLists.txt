@@ -10,7 +10,7 @@ set(ENGINE_SOURCES
     "src/asset_bank.c"
     "src/scene.c"
     
- "src/input.c")
+ "src/input.c" "src/kowai.cpp")
 
 # 🟢 1. AGREGAR FUENTES DE NFD AL MOTOR SEGÚN SISTEMA OPERATIVO
 set(NFD_SOURCES
@@ -79,6 +79,8 @@ target_link_libraries(KowaiEngine PUBLIC SDL3::SDL3-shared)
 if(WIN32)
     target_link_libraries(KowaiEngine PUBLIC ole32 uuid shell32)
 endif()
+
+set_property(TARGET KowaiEngine PROPERTY CXX_STANDARD 17)
 
 # Agrupar archivos en el Explorador de Soluciones de VS
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES ${ENGINE_SOURCES})
