@@ -408,6 +408,20 @@ extern "C" {
                             input->contexts[i].context_name,
                             sizeof(rename_buffer));
                     }
+
+                    // Click derecho abre menú contextual
+                    if (!input->contexts[i].is_read_only &&
+                        ImGui::BeginPopupContextItem())
+                    {
+                        if (ImGui::MenuItem("Eliminar contexto"))
+                        {
+                            kowai_input_delete_context(input, i);
+
+                            if (selected_context >= input->context_count)
+                                selected_context = input->context_count - 1;
+                        }
+                        ImGui::EndPopup();
+                    }
                 }
             }
 
@@ -469,7 +483,7 @@ extern "C" {
 
                 if (ImGui::BeginTable(
                     "MappingsTable",
-                    4,
+                    5,
                     ImGuiTableFlags_Borders |
                     ImGuiTableFlags_RowBg |
                     ImGuiTableFlags_Resizable))
@@ -478,6 +492,7 @@ extern "C" {
                     ImGui::TableSetupColumn("Type");
                     ImGui::TableSetupColumn("Binding");
                     ImGui::TableSetupColumn("Modifier");
+                    ImGui::TableSetupColumn("##del", ImGuiTableColumnFlags_WidthFixed, 24.0f); // ← nueva
 
                     ImGui::TableHeadersRow();
 
@@ -520,7 +535,8 @@ extern "C" {
                         {
                             "Keyboard",
                             "MouseButton",
-                            "MouseWheel"
+                            "MouseWheel",
+                            "Gamepad"
                         };
 
                         int current_type = (int)map->type;
@@ -545,7 +561,7 @@ extern "C" {
 
                         const char* label =
                             (g_waiting_binding == map)
-                            ? "Press key..."
+                            ? "Press key or mouse button..."
                             : kowai_input_code_to_string(
                                 map->type,
                                 map->code);
@@ -573,6 +589,19 @@ extern "C" {
                         {
                             ImGui::TextDisabled("-");
                         }
+
+                        ImGui::TableSetColumnIndex(4);
+                        ImGui::PushID(i);
+                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                        if (ImGui::SmallButton("✕"))
+                        {
+                            kowai_input_delete_mapping(ctx, i);
+                            ImGui::PopStyleColor();
+                            ImGui::PopID();
+                            break; // salir del loop para evitar acceso inválido
+                        }
+                        ImGui::PopStyleColor();
+                        ImGui::PopID();
                     }
 
                     ImGui::EndTable();
@@ -1078,16 +1107,31 @@ extern "C" {
         ImGui_ImplSDLGPU3_RenderDrawData(ImGui::GetDrawData(), cmd, pass, nullptr);
     }
 
-    bool imgui_backend_process_event(SDL_Event* event) {
+    bool imgui_backend_process_event(SDL_Event* event, KowaiInputSystem* input) {
+        ImGuiIO& io = ImGui::GetIO();
+
         bool handled = ImGui_ImplSDL3_ProcessEvent(event);
+
+
+        if (event->type == SDL_EVENT_GAMEPAD_ADDED)
+        {
+            kowai_input_on_gamepad_added(input, event->gdevice.which);
+        }
+
+        // Siempre procesar el wheel, fuera del g_waiting_binding
+        if (event->type == SDL_EVENT_MOUSE_WHEEL)
+        {
+            if (event->wheel.y > 0)
+                input->current_wheel_up = true;
+            else if (event->wheel.y < 0)
+                input->current_wheel_down = true;
+        }
 
         if (g_waiting_binding)
         {
             if (event->type == SDL_EVENT_KEY_DOWN)
             {
                 SDL_Scancode scancode = event->key.scancode;
-
-                // ✅ Leer mods del evento, NO de SDL_GetModState()
                 SDL_Keymod mods = event->key.mod;
 
                 g_waiting_binding->modifier = 0;
@@ -1116,6 +1160,37 @@ extern "C" {
 
                 g_waiting_binding->type = INPUT_TYPE_KEYBOARD;
                 g_waiting_binding->code = scancode;
+                g_waiting_binding = nullptr;
+                return true;
+            }
+
+            // ← nuevo: captura de botón de mouse
+            if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN)
+            {
+                g_waiting_binding->modifier = 0; // mouse buttons no usan modifier
+                g_waiting_binding->type = INPUT_TYPE_MOUSE_BUTTON;
+                g_waiting_binding->code = event->button.button;
+                g_waiting_binding = nullptr;
+                return true;
+            }
+
+            if (event->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN)
+            {
+                g_waiting_binding->modifier = 0;
+                g_waiting_binding->type = INPUT_TYPE_GAMEPAD_BUTTON;
+                g_waiting_binding->code = event->gbutton.button;
+                g_waiting_binding = nullptr;
+                return true;
+            }
+
+            // Dentro de g_waiting_binding:
+            if (event->type == SDL_EVENT_MOUSE_WHEEL)
+            {
+                g_waiting_binding->modifier = 0;
+                g_waiting_binding->type = INPUT_TYPE_MOUSE_WHEEL;
+                g_waiting_binding->code = (event->wheel.y > 0)
+                    ? KOWAI_WHEEL_UP
+                    : KOWAI_WHEEL_DOWN;
                 g_waiting_binding = nullptr;
                 return true;
             }

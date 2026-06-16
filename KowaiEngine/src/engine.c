@@ -35,7 +35,7 @@ KowaiEngine* kowai_init(const char* title, int width, int height) {
     KowaiEngine* engine = malloc(sizeof(KowaiEngine));
     if (!engine) return NULL;
 
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         free(engine);
         return NULL;
     }
@@ -87,17 +87,13 @@ void kowai_update(KowaiEngine* engine) {
     // Guardamos los estados del frame anterior antes de procesar los nuevos
     kowai_input_update(&engine->input_system);
 
-    // Recuperamos los deltas del mouse de forma nativa a través de SDL3
-    float mouse_dx = 0.0f, mouse_dy = 0.0f;
-    SDL_GetRelativeMouseState(&mouse_dx, &mouse_dy);
-
     // 2. Procesar Eventos del Sistema
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
 
         // 🟢 Si ImGui captura el evento, hacemos continue inmediatamente.
         // Esto evita que se disparen atajos o lógicas del motor por detrás de la UI.
-        if (imgui_backend_process_event(&event)) {
+        if (imgui_backend_process_event(&event, &engine->input_system)) {
             continue;
         }
 
@@ -144,8 +140,8 @@ void kowai_update(KowaiEngine* engine) {
                 kowai_camera_process_input_mapped(
                     engine->active_camera,
                     &engine->input_system,
-                    mouse_dx,
-                    mouse_dy,
+                    engine->input_system.mouse_delta_x,
+                    engine->input_system.mouse_delta_y,
                     (float)engine->timer->fixed_delta_time
                 );
             }
@@ -171,6 +167,13 @@ void kowai_update(KowaiEngine* engine) {
         }
 
         engine->timer->accumulator -= engine->timer->fixed_delta_time;
+
+
+        SDL_Log("=== Input Gamepad ===");
+        SDL_Log("Left  Stick: (%.2f, %.2f)", engine->input_system.left_stick_x, engine->input_system.left_stick_y);
+        SDL_Log("Right Stick: (%.2f, %.2f)", engine->input_system.right_stick_x, engine->input_system.right_stick_y);
+        SDL_Log("Left  Trigger: %.2f", engine->input_system.left_trigger);
+        SDL_Log("Right Trigger: %.2f", engine->input_system.right_trigger);
     }
 
     // 5. Matrices de proyección de la cámara activa (Tu código actual...)

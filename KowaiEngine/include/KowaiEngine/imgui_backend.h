@@ -7,6 +7,7 @@
 
 typedef struct KowaiEngine KowaiEngine;
 typedef struct KowaiEntity KowaiEntity;
+typedef struct KowaiInputSystem KowaiInputSystem;
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,7 +30,7 @@ extern "C" {
 	void imgui_backend_render(SDL_GPUCommandBuffer* cmd, SDL_GPURenderPass* pass);
 
 	// Pasar eventos SDL para que ImGui los procese (input)
-	bool imgui_backend_process_event(SDL_Event* event);
+	bool imgui_backend_process_event(SDL_Event* event, KowaiInputSystem* input);
 
 	void imgui_backend_skip_frame(void);
 
