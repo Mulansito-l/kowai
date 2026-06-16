@@ -31,7 +31,7 @@ struct KowaiEngine {
     char project_path[256]; // 🟢 Nueva variable
 };
 
-KowaiEngine* kowai_init(const char* title, int width, int height) {
+KowaiEngine* kowai_init(const char* title, int width, int height, const char* project_path) {
     KowaiEngine* engine = malloc(sizeof(KowaiEngine));
     if (!engine) return NULL;
 
@@ -76,6 +76,10 @@ KowaiEngine* kowai_init(const char* title, int width, int height) {
     SDL_GPUDevice* device = kowai_renderer_get_device(engine->renderer);
     SDL_GPUTextureFormat swapchain_format = SDL_GetGPUSwapchainTextureFormat(device, engine->window);
     imgui_backend_init(engine->window, device, swapchain_format);
+
+    kowai_engine_set_project_path(engine, project_path);
+
+    kowai_input_load(&engine->input_system, project_path);
 
     return engine;
 }
@@ -317,7 +321,7 @@ void kowai_engine_create_editor_input_context(KowaiEngine* engine)
 void kowai_engine_set_project_path(KowaiEngine* engine, const char* path) {
     if (engine && path) {
         SDL_strlcpy(engine->project_path, path, sizeof(engine->project_path));
-        SDL_Log("KowaiEngine: Ruta de proyecto establecida: %s", engine->project_path);
+        SDL_strlcpy(engine->input_system.project_path, path, sizeof(engine->input_system.project_path));
     }
 }
 

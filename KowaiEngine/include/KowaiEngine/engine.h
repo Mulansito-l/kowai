@@ -11,7 +11,7 @@ typedef struct KowaiCamera KowaiCamera;
 typedef struct KowaiInputSystem KowaiInputSystem;
 
 // Funciones de ciclo de vida del motor
-KowaiEngine* kowai_init(const char* title, int width, int height);
+KowaiEngine* kowai_init(const char* title, int width, int height, const char* project_path);
 bool kowai_is_running(KowaiEngine* engine);
 void kowai_update(KowaiEngine* engine);
 void kowai_shutdown(KowaiEngine* engine);

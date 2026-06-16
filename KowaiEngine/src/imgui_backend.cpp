@@ -379,6 +379,7 @@ extern "C" {
                                 rename_buffer,
                                 sizeof(input->contexts[i].context_name));
                         renaming_context = -1;
+                        kowai_input_save(kowai_engine_get_input_system_ptr(engine), kowai_engine_get_input_system_ptr(engine)->project_path);
                     }
 
                     // Cancelar con Escape o click afuera
@@ -524,6 +525,11 @@ extern "C" {
                             sizeof(map->action_name)
                         );
 
+                        if (ImGui::IsItemDeactivatedAfterEdit())
+                        {
+                            kowai_input_save(input, input->project_path);
+                        }
+
                         ImGui::PopID();
 
                         // TYPE
@@ -595,7 +601,7 @@ extern "C" {
                         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
                         if (ImGui::SmallButton("✕"))
                         {
-                            kowai_input_delete_mapping(ctx, i);
+                            kowai_input_delete_mapping(input, ctx, i);
                             ImGui::PopStyleColor();
                             ImGui::PopID();
                             break; // salir del loop para evitar acceso inválido
@@ -1161,6 +1167,7 @@ extern "C" {
                 g_waiting_binding->type = INPUT_TYPE_KEYBOARD;
                 g_waiting_binding->code = scancode;
                 g_waiting_binding = nullptr;
+                kowai_input_save(input, input->project_path);
                 return true;
             }
 
@@ -1171,6 +1178,7 @@ extern "C" {
                 g_waiting_binding->type = INPUT_TYPE_MOUSE_BUTTON;
                 g_waiting_binding->code = event->button.button;
                 g_waiting_binding = nullptr;
+                kowai_input_save(input, input->project_path);
                 return true;
             }
 
@@ -1180,6 +1188,7 @@ extern "C" {
                 g_waiting_binding->type = INPUT_TYPE_GAMEPAD_BUTTON;
                 g_waiting_binding->code = event->gbutton.button;
                 g_waiting_binding = nullptr;
+                kowai_input_save(input, input->project_path);
                 return true;
             }
 
@@ -1192,6 +1201,7 @@ extern "C" {
                     ? KOWAI_WHEEL_UP
                     : KOWAI_WHEEL_DOWN;
                 g_waiting_binding = nullptr;
+                kowai_input_save(input, input->project_path);
                 return true;
             }
         }
